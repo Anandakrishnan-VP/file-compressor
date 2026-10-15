@@ -4,9 +4,12 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-pdf-assets.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-pdf-assets.mjs",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "playwright test"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
@@ -14,10 +17,12 @@
     "gsap": "^3.15.0",
     "lucide-react": "^1.57.0",
     "matter-js": "^0.20.0",
+    "pdfjs-dist": "^5.4.624",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@vitejs/plugin-react": "^6.1.2",
     "vite": "^8.3.4"
   }

@@ -1,52 +1,43 @@
-import { zipSync } from 'fflate';
+import { drawPaper, drawSoftShadow, paperBounds } from "./paperMesh";
 
-export async function compressFile(file) {
-  // Check for easter egg
-  if (file.name.endsWith('.crushed.zip') || file.name.endsWith('.crushr')) {
-    throw new Error('EASTER_EGG_SELF_CRUSH');
-  }
-
-  const startTime = performance.now();
-  const buffer = await file.arrayBuffer();
-  const uint8 = new Uint8Array(buffer);
-
-  // Compress using fflate maximum level 9
-  const zipped = zipSync({
-    [file.name]: uint8,
-  }, {
-    level: 9,
-    mem: 8,
+export function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) =>
+        blob
+          ? resolve(blob)
+          : reject(new Error("Could not create the PNG. Please try again.")),
+      "image/png",
+    );
   });
+}
 
-  const durationMs = Math.max(1, performance.now() - startTime);
-  const blob = new Blob([zipped], { type: 'application/zip' });
-
-  const beforeSize = file.size;
-  const afterSize = blob.size;
-  const savedBytes = Math.max(0, beforeSize - afterSize);
-  const ratio = beforeSize > 0 ? (((beforeSize - afterSize) / beforeSize) * 100).toFixed(1) : '0.0';
-
-  // Output filename: filename.crushed.zip
-  const baseName = file.name.replace(/\.[^/.]+$/, "");
-  const downloadName = `${baseName}.crushed.zip`;
-
+// Export the exact final mesh, never a screenshot of the interface.
+export async function compressFile(file, mesh) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1600;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#f8f5ed";
+  ctx.fillRect(0, 0, 1600, 1600);
+  const bounds = paperBounds(mesh);
+  const size =
+    1040 / Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  const x = 800 - ((bounds.minX + bounds.maxX) / 2) * size;
+  const y = 760 - ((bounds.minY + bounds.maxY) / 2) * size;
+  drawSoftShadow(ctx, 800, y + bounds.maxY * size + 22, 560, 105, 0.24);
+  drawPaper(ctx, mesh, { x, y, size });
+  const blob = await canvasToBlob(canvas);
+  const base = file.name.replace(/\.[^/.]+$/, "") || file.name || "file";
   return {
     blob,
-    downloadName,
-    originalName: file.name,
-    beforeSize,
-    afterSize,
-    savedBytes,
-    ratio: parseFloat(ratio),
-    durationMs,
-    throughputMBps: ((beforeSize / (1024 * 1024)) / (durationMs / 1000)).toFixed(2),
+    downloadName: `${base}-compressed.png`,
+    width: 1600,
+    height: 1600,
   };
 }
 
 export function formatBytes(bytes) {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  if (!bytes) return "0 B";
+  const i = Math.min(3, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${Number((bytes / 1024 ** i).toFixed(1))} ${["B", "KB", "MB", "GB"][i]}`;
 }

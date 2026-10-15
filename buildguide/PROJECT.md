@@ -1,3 +1,5 @@
+> Historical funathon concept. The active product is now physical compression to PNG with one hydraulic press. See README.md for current behavior, setup, limits and tests. The archive-compression roadmap below is retained for reference only.
+
 # 🗜️💥 CRUSHR 9000 — The Most Dramatic File Compressor Ever Built
 
 > *"Why compress a file quietly when you can destroy it with a hydraulic press first?"*

@@ -1,129 +1,173 @@
-import React, { useRef, useState } from 'react';
-import { UploadCloud, File, Flame } from 'lucide-react';
-import { mapFileTypeToScene } from '../utils/mapFileType';
+import { useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUpRight,
+  Check,
+  FileText,
+  LoaderCircle,
+  LockKeyhole,
+} from "lucide-react";
+import { createSampleFile } from "../utils/preview";
+import { formatBytes } from "../utils/compress";
 
-export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const fileInputRef = useRef(null);
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragOver(true);
+export default function DropZone({
+  state,
+  previewURL,
+  onFileSelected,
+  onCrush,
+  onReset,
+}) {
+  const input = useRef(null),
+    depth = useRef(0);
+  const [dragging, setDragging] = useState(false);
+  const { phase, file, preview, error } = state;
+  const locked = phase === "compressing" || phase === "complete";
+  const select = (files) => {
+    if (!locked && files?.[0]) onFileSelected(files[0]);
   };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFileSelected(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      onFileSelected(e.target.files[0]);
-    }
-  };
-
-  const fileInfo = file ? mapFileTypeToScene(file) : null;
-
   return (
-    <div className="w-full h-full flex flex-col items-center justify-center p-6 sm:p-8 bg-slate-900/90 border border-slate-800 rounded-3xl relative overflow-hidden shadow-2xl">
-      {/* Top Hazard Accent */}
-      <div className="absolute top-0 inset-x-0 h-2 hazard-stripes opacity-80" />
-
-      {/* Hidden File Input */}
+    <section
+      className="upload-panel"
+      aria-labelledby="upload-title"
+      onDragEnter={(e) => {
+        e.preventDefault();
+        if (!locked) {
+          depth.current++;
+          setDragging(true);
+        }
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = locked ? "none" : "copy";
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        if (--depth.current <= 0) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        depth.current = 0;
+        setDragging(false);
+        select(e.dataTransfer.files);
+      }}
+    >
+      <div className="panel-kicker">
+        <span className="step-number">01</span> THE RAW MATERIAL
+      </div>
+      <h2 id="upload-title">Got a big file?</h2>
+      <p className="panel-description">Let's put a little pressure on it.</p>
       <input
+        ref={input}
+        id="file-input"
         type="file"
-        ref={fileInputRef}
-        onChange={handleFileChange}
-        className="hidden"
+        aria-label="Choose a file to compress"
+        className="visually-hidden"
+        tabIndex={-1}
+        disabled={locked}
+        onChange={(e) => {
+          select(e.target.files);
+          e.target.value = "";
+        }}
       />
-
-      {/* STATE 1: NO FILE PICKED - SHOW LARGE DRAG AND DROP ZONE */}
-      {!file ? (
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current && fileInputRef.current.click()}
-          className={`w-full h-full min-h-[360px] rounded-2xl border-2 border-dashed p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 select-none ${
-            isDragOver
-              ? 'border-amber-400 bg-amber-950/30 shadow-[0_0_40px_rgba(245,158,11,0.25)] scale-[1.01]'
-              : 'border-slate-700 bg-slate-950/50 hover:border-amber-500/60 hover:bg-slate-950/80'
-          }`}
-        >
-          {/* Industrial Upload Icon */}
-          <div className="w-20 h-20 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-6 shadow-inner text-amber-400">
-            <UploadCloud size={38} />
+      {phase === "idle" || phase === "error" ? (
+        <>
+          <div className={`drop-zone ${dragging ? "is-dragging" : ""}`}>
+            <div className="paper-doodle" aria-hidden="true">
+              <FileText size={49} strokeWidth={1.25} />
+              <span>↓</span>
+            </div>
+            <strong>Drop your file here</strong>
+            <span className="muted">or give it a gentle nudge</span>
+            <button
+              className="button primary choose-button"
+              onClick={() => input.current.click()}
+            >
+              Choose a file <ArrowUpRight size={18} />
+            </button>
+            <span className="file-hint">Any file · up to 20 MB</span>
           </div>
-
-          <h3 className="font-display font-extrabold text-xl text-white tracking-wide mb-2">
-            DRAG & DROP FILE HERE
-          </h3>
-
-          <p className="font-sans text-xs text-slate-400 max-w-xs mb-6">
-            Accepts any file format: PDF, Word, Excel, PPT, images, video, audio, code, zip, or unknown files.
-          </p>
-
-          {/* "Choose File" Button inside zone */}
+          {error && (
+            <p className="error-message" role="alert">
+              {error}
+            </p>
+          )}
           <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              fileInputRef.current && fileInputRef.current.click();
-            }}
-            className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-display font-black text-xs tracking-widest shadow-lg hover:shadow-amber-500/25 transition-all active:scale-95 uppercase"
+            className="text-button sample-button"
+            onClick={() => onFileSelected(createSampleFile())}
           >
-            CHOOSE FILE
+            Just looking? Try a sample <span aria-hidden="true">↗</span>
           </button>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              const mockPdf = new File(['%PDF-1.4 Mock PDF Content'], 'Q3_Financial_Audit_Report.pdf', { type: 'application/pdf' });
-              onFileSelected(mockPdf);
-            }}
-            className="mt-4 text-[11px] font-mono-tech text-amber-400/90 hover:text-amber-300 underline underline-offset-4 cursor-pointer transition-colors"
-          >
-            ⚡ Test Benchmark: Q3_Financial_Audit_Report.pdf
-          </button>
-        </div>
+        </>
       ) : (
-        /* STATE 2: FILE PICKED - SHOW ONLY FILE NAME + SMALL ICON + "CRUSH IT" BUTTON */
-        <div className="w-full flex flex-col items-center justify-center text-center space-y-6 my-auto select-none">
-          {/* File Name & Small Icon */}
-          <div className="flex flex-col items-center gap-3">
-            <div className="text-4xl p-4 bg-slate-800/80 rounded-2xl border border-slate-700 shadow-xl">
-              {fileInfo?.icon || '📄'}
+        <>
+          <div className={`selected-file ${dragging ? "is-dragging" : ""}`}>
+            <div className="selected-preview">
+              {phase === "preparing" ? (
+                <LoaderCircle className="spinner" size={32} />
+              ) : (
+                previewURL && (
+                  <img
+                    src={previewURL}
+                    alt={preview?.label || "Original file preview"}
+                  />
+                )
+              )}
+              {phase === "complete" && (
+                <span className="file-done">
+                  <Check size={19} />
+                </span>
+              )}
             </div>
-
-            <div className="font-display font-bold text-lg text-white max-w-[280px] break-all px-2">
-              {file.name}
-            </div>
+            <strong className="selected-name" title={file?.name}>
+              {file?.name}
+            </strong>
+            <span className="file-hint">
+              {formatBytes(file?.size)}
+              {preview && ` · ${preview.label}`}
+            </span>
+            {preview && <p className="preview-detail">{preview.detail}</p>}
           </div>
-
-          {/* Single "Crush It" button below file name */}
           <button
+            className="button primary crush-button"
             onClick={onCrush}
-            disabled={isCrushing}
-            className={`w-full max-w-xs py-4 px-8 rounded-2xl font-display font-black text-base tracking-widest uppercase transition-all duration-200 shadow-xl flex items-center justify-center gap-3 ${
-              isCrushing
-                ? 'bg-amber-700 text-black opacity-80 cursor-wait'
-                : 'bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-black hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(245,158,11,0.4)]'
-            }`}
+            disabled={phase !== "ready"}
           >
-            <Flame size={20} className={isCrushing ? 'animate-bounce' : ''} />
-            <span>{isCrushing ? 'CRUSHING...' : 'CRUSH IT'}</span>
+            {phase === "preparing"
+              ? "Preparing your file…"
+              : phase === "compressing"
+                ? "Applying pressure…"
+                : phase === "complete"
+                  ? "Nicely crumpled."
+                  : "Compress this file"}
+            {phase === "complete" ? (
+              <Check size={19} />
+            ) : (
+              <ArrowDown size={19} />
+            )}
           </button>
-        </div>
+          {phase !== "compressing" && phase !== "complete" && (
+            <button
+              className="text-button change-button"
+              onClick={() => input.current.click()}
+            >
+              Choose a different file
+            </button>
+          )}
+          {phase === "preparing" && (
+            <button className="text-button" onClick={onReset}>
+              Cancel
+            </button>
+          )}
+          {phase === "complete" && (
+            <a className="text-button change-button" href="#result">
+              Your result is ready below ↓
+            </a>
+          )}
+        </>
       )}
-    </div>
+      <p className="upload-footnote">
+        <LockKeyhole size={14} /> Private by design. No uploads to a server.
+      </p>
+    </section>
   );
 }
