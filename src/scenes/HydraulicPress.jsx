@@ -1,662 +1,374 @@
-import React, { useEffect, useRef } from "react";
-import * as THREE from "three";
+import { useEffect, useRef, useState } from "react";
 import gsap from "gsap";
+import { drawPaper, drawSoftShadow, paperBounds } from "../utils/paperMesh";
 import { soundEngine } from "../utils/soundEngine";
 
-/* -------------------------------------------------------------
-   PDF TEXTURE LOADER
-   Renders page-1 of the real PDF onto a canvas. Falls back to
-   a white A4 replica with the file name on it.
-------------------------------------------------------------- */
-async function loadPdfTexture(file, targetW = 600, targetH = 848) {
-  try {
-    if (!file) throw new Error("no file");
-    const pdfjsLib = await import("pdfjs-dist");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
-      import.meta.url
-    ).href;
-
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const page = await pdf.getPage(1);
-    const viewport = page.getViewport({ scale: 1 });
-    const scale = Math.min(targetW / viewport.width, targetH / viewport.height) * 2;
-    const scaledViewport = page.getViewport({ scale });
-
-    const canvas = document.createElement("canvas");
-    canvas.width = scaledViewport.width;
-    canvas.height = scaledViewport.height;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
-    return canvas;
-  } catch (e) {
-    console.warn("[CRUSHR] PDF render failed, using fallback:", e?.message ?? e);
-    return buildFallbackTexture(targetW * 2, targetH * 2, file?.name ?? "document.pdf");
+const INK = "#30332e",
+  YELLOW = "#f5d56f";
+const REST = {
+  x: 120,
+  bottom: 390,
+  fold: 0,
+  plate: 180,
+  angle: -0.08,
+  pressure: 0,
+  dust: 0,
+  shake: 0,
+  contact: false,
+  alpha: 1,
+};
+function box(ctx, x, y, w, h, radius, fill, stroke = INK, line = 2.5) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, radius);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = line;
+    ctx.stroke();
   }
 }
-
-function buildFallbackTexture(w = 1200, h = 1696, fileName = "document.pdf") {
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = "#e2e8f0";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(1, 1, w - 2, h - 2);
-
-  // PDF badge
-  ctx.fillStyle = "#dc2626";
+function line(ctx, x1, y1, x2, y2, color = INK, width = 2) {
   ctx.beginPath();
-  ctx.roundRect(40, 40, 100, 56, 10);
-  ctx.fill();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 52px Inter, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("PDF", 90, 80);
-
-  // File name
-  ctx.fillStyle = "#0f172a";
-  ctx.font = "bold 40px Inter, sans-serif";
-  ctx.textAlign = "left";
-  let displayName = fileName;
-  const maxW = w - 200;
-  while (ctx.measureText(displayName).width > maxW && displayName.length > 4) {
-    displayName = displayName.slice(0, -1);
-  }
-  if (displayName !== fileName) displayName += "...";
-  ctx.fillText(displayName, 160, 78);
-
-  ctx.strokeStyle = "#ef4444";
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(40, 116);
-  ctx.lineTo(w - 40, 116);
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
   ctx.stroke();
-
-  ctx.fillStyle = "#1e293b";
-  ctx.fillRect(40, 150, 300, 22);
-  ctx.fillStyle = "#cbd5e1";
-  [w - 100, w - 160, w - 130, w - 180, w - 110].forEach((lw, i) => {
+}
+function bolt(ctx, x, y) {
+  ctx.beginPath();
+  ctx.arc(x, y, 5, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff6ca";
+  ctx.fill();
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  line(ctx, x - 2, y + 2, x + 2, y - 2, INK, 1.3);
+}
+function paint(ctx, mesh, s, phase) {
+  ctx.clearRect(0, 0, 720, 540);
+  ctx.save();
+  ctx.translate(
+    Math.sin(s.shake * 40) * s.shake * 3,
+    Math.cos(s.shake * 30) * s.shake * 1.7,
+  );
+  drawSoftShadow(ctx, 368, 489, 285, 25, 0.16);
+  // Rear of the tray and frame.
+  box(ctx, 503, 443, 147, 44, [13, 13, 6, 6], "#dce4d8");
+  box(ctx, 188, 95, 29, 316, 8, "#5e685e");
+  box(ctx, 477, 95, 29, 316, 8, "#5e685e");
+  line(ctx, 198, 115, 198, 380, "#a2afa0", 4);
+  line(ctx, 487, 115, 487, 380, "#a2afa0", 4);
+  // Input shelf, machine bed, feet.
+  box(ctx, 45, 390, 151, 16, 7, "#d2d8cd");
+  for (let x = 59; x < 185; x += 20) {
     ctx.beginPath();
-    ctx.roundRect(40, 190 + i * 30, lw, 14, 6);
-    ctx.fill();
-  });
-
-  const cx = 40, cy = 360, cw = w - 80, ch = 240;
-  const grad = ctx.createLinearGradient(cx, cy, cx + cw, cy + ch);
-  grad.addColorStop(0, "#f1f5f9");
-  grad.addColorStop(1, "#e2e8f0");
-  ctx.fillStyle = grad;
+    ctx.arc(x, 398, 4, 0, Math.PI * 2);
+    ctx.strokeStyle = "#6d7769";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+  box(ctx, 193, 432, 39, 48, 8, "#535e51");
+  box(ctx, 461, 432, 39, 48, 8, "#535e51");
+  box(ctx, 178, 390, 338, 64, 12, YELLOW);
+  box(ctx, 178, 390, 338, 15, [9, 9, 0, 0], "#fff0aa");
+  bolt(ctx, 198, 435);
+  bolt(ctx, 496, 435);
+  for (let x = 318; x < 382; x += 12) line(ctx, x, 421, x, 437, "#8e7c42", 3);
+  // Pressure dial on the side.
+  box(ctx, 119, 219, 65, 102, 13, "#f8f3df");
   ctx.beginPath();
-  ctx.roundRect(cx, cy, cw, ch, 10);
+  ctx.arc(151, 253, 23, 0, Math.PI * 2);
+  ctx.fillStyle = "#fffdf4";
   ctx.fill();
-  ctx.strokeStyle = "#cbd5e1";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ["#38bdf8", "#818cf8", "#f43f5e", "#10b981", "#f59e0b"].forEach((col, i) => {
-    const barH = 80 + Math.sin(i * 1.3) * 60;
-    ctx.fillStyle = col;
-    ctx.fillRect(cx + 40 + i * 100, cy + ch - barH - 20, 60, barH);
-  });
-
-  ctx.strokeStyle = "#e2e8f0";
+  ctx.strokeStyle = INK;
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(40, h - 80);
-  ctx.lineTo(w - 40, h - 80);
   ctx.stroke();
-  ctx.fillStyle = "#94a3b8";
-  ctx.font = "28px 'JetBrains Mono', monospace";
-  ctx.textAlign = "left";
-  ctx.fillText("CRUSHR LABS • DESTRUCTION READY", 40, h - 40);
-  ctx.textAlign = "right";
-  ctx.fillText("Page 1 of 1", w - 40, h - 40);
-
-  return canvas;
-}
-
-/* -------------------------------------------------------------
-   PARTICLE SYSTEM (dust + ink puffs)
-------------------------------------------------------------- */
-class ParticleSystem {
-  constructor(scene) {
-    this.scene = scene;
-    this.particles = [];
+  ctx.beginPath();
+  ctx.arc(151, 253, 17, Math.PI * 1.05, Math.PI * 1.95);
+  ctx.strokeStyle = "#e7806c";
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  const angle = Math.PI * (1.12 + s.pressure * 0.78);
+  line(
+    ctx,
+    151,
+    253,
+    151 + Math.cos(angle) * 15,
+    253 + Math.sin(angle) * 15,
+    INK,
+    2,
+  );
+  ctx.beginPath();
+  ctx.arc(151, 253, 3, 0, Math.PI * 2);
+  ctx.fillStyle = INK;
+  ctx.fill();
+  box(
+    ctx,
+    138,
+    289,
+    26,
+    13,
+    6,
+    phase === "compressing" ? "#e7826e" : "#9dad8f",
+  );
+  // Paper keeps a fixed lower edge on the bed as connected facets fold.
+  let top = 201;
+  if (mesh) {
+    const bounds = paperBounds(mesh, s.fold),
+      size = 190;
+    const y = s.bottom - bounds.maxY * size;
+    top = y + bounds.minY * size;
+    drawSoftShadow(ctx, s.x, s.bottom + 2, 65 - s.fold * 12, 10, 0.17);
+    ctx.save();
+    ctx.translate(s.x, s.bottom);
+    ctx.rotate(s.angle);
+    ctx.translate(-s.x, -s.bottom);
+    drawPaper(ctx, mesh, { x: s.x, y, size, progress: s.fold, alpha: s.alpha });
+    ctx.restore();
+  } else {
+    // An honest idle illustration, replaced entirely by the uploaded texture.
+    ctx.save();
+    ctx.translate(348, 319);
+    ctx.rotate(-0.09);
+    box(ctx, -49, -66, 98, 137, 4, "#fffdf6");
+    line(ctx, -30, -42, 11, -42, "#c8c9bc", 3);
+    line(ctx, -30, -31, 26, -31, "#c8c9bc", 3);
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.ellipse(-13, 7, 3, 5, 0, 0, 7);
+    ctx.ellipse(13, 7, 3, 5, 0, 0, 7);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 17, 9, 0.2, Math.PI - 0.2);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
   }
-  spawn(x, y, z, count = 30, color = 0xffffff) {
-    for (let i = 0; i < count; i++) {
-      const geo = new THREE.SphereGeometry(0.035, 4, 4);
-      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
-      const mesh = new THREE.Mesh(geo, mat);
-      const angle = Math.random() * Math.PI * 2;
-      const elev = (Math.random() - 0.5) * Math.PI;
-      const speed = 0.04 + Math.random() * 0.12;
-      mesh.position.set(x, y, z);
-      this.scene.add(mesh);
-      this.particles.push({
-        mesh,
-        mat,
-        vx: Math.cos(angle) * Math.cos(elev) * speed,
-        vy: Math.abs(Math.sin(elev)) * speed + 0.02,
-        vz: Math.sin(angle) * Math.cos(elev) * speed * 0.6,
-        gravity: -0.003,
-        alpha: 1,
-        decay: 0.012 + Math.random() * 0.018,
-      });
+  // Piston and hazard-striped press face.
+  const plateBottom = s.contact ? top : s.plate;
+  const chrome = ctx.createLinearGradient(325, 0, 369, 0);
+  chrome.addColorStop(0, "#859183");
+  chrome.addColorStop(0.35, "#f3f4e9");
+  chrome.addColorStop(0.57, "#d6dece");
+  chrome.addColorStop(1, "#87927f");
+  box(ctx, 324, 105, 46, Math.max(20, plateBottom - 137), 3, chrome);
+  box(ctx, 229, plateBottom - 32, 236, 32, 6, "#515b50");
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(235, plateBottom - 26, 224, 19, 3);
+  ctx.clip();
+  ctx.fillStyle = "#f6d574";
+  ctx.fillRect(235, plateBottom - 26, 224, 19);
+  for (let x = 220; x < 480; x += 32) {
+    ctx.beginPath();
+    ctx.moveTo(x, plateBottom - 26);
+    ctx.lineTo(x + 14, plateBottom - 26);
+    ctx.lineTo(x + 3, plateBottom - 7);
+    ctx.lineTo(x - 11, plateBottom - 7);
+    ctx.fillStyle = "#444a3f";
+    ctx.fill();
+  }
+  ctx.restore();
+  // Rounded top housing, offset side and simple engraved details.
+  box(ctx, 185, 59, 328, 82, 17, "#c7a945");
+  box(ctx, 177, 49, 328, 82, 17, YELLOW);
+  box(ctx, 177, 49, 328, 14, [17, 17, 0, 0], "#ffe99f", null);
+  ctx.font = "900 27px Arial, sans-serif";
+  ctx.fillStyle = INK;
+  ctx.textAlign = "center";
+  ctx.fillText("CRUSHR", 341, 97);
+  bolt(ctx, 198, 91);
+  bolt(ctx, 484, 91);
+  line(ctx, 267, 112, 415, 112, "#b49a49", 1.5);
+  box(ctx, 317, 24, 49, 25, [8, 8, 0, 0], "#e58b73");
+  box(ctx, 312, 43, 59, 7, 3, "#5e685e");
+  // Small, deterministic dust puff at final squeeze.
+  if (s.dust > 0)
+    for (let i = 0; i < 12; i++) {
+      const t = 1 - s.dust,
+        side = i % 2 ? 1 : -1;
+      ctx.globalAlpha = s.dust * 0.48;
+      ctx.fillStyle = "#c6b993";
+      ctx.beginPath();
+      ctx.arc(
+        347 + side * (54 + t * (50 + i * 4)),
+        382 - Math.sin(t * Math.PI) * (12 + i * 2),
+        3 + (i % 4),
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
     }
-  }
-  update() {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
-      p.mesh.position.x += p.vx;
-      p.mesh.position.y += p.vy;
-      p.mesh.position.z += p.vz;
-      p.vy += p.gravity;
-      p.alpha -= p.decay;
-      p.mat.opacity = Math.max(0, p.alpha);
-      if (p.alpha <= 0) {
-        this.scene.remove(p.mesh);
-        p.mat.dispose();
-        p.mesh.geometry.dispose();
-        this.particles.splice(i, 1);
-      }
-    }
-  }
-  dispose() {
-    this.particles.forEach(p => {
-      this.scene.remove(p.mesh);
-      p.mat.dispose();
-      p.mesh.geometry.dispose();
-    });
-    this.particles = [];
-  }
+  ctx.globalAlpha = 1;
+  box(ctx, 503, 477, 147, 16, [3, 3, 8, 8], "#bdcbb6");
+  ctx.font = "bold 10px monospace";
+  ctx.fillStyle = "#596450";
+  ctx.fillText("OUTPUT", 576, 488);
+  ctx.restore();
 }
-
-/* -------------------------------------------------------------
-   MAIN COMPONENT
-------------------------------------------------------------- */
-export default function HydraulicPress({ file, fileName = "report.pdf", onComplete }) {
-  const mountRef = useRef(null);
-  const gaugeRef = useRef(null);
-  const psiValueRef = useRef(null);
-
+export default function HydraulicPress({ mesh, phase, runId, onComplete }) {
+  const canvas = useRef(null),
+    latestComplete = useRef(onComplete);
+  const [caption, setCaption] = useState("Ready when you are.");
   useEffect(() => {
-    let rafId;
-    let renderer, scene, camera, tl, particles;
-    let isCleanedUp = false;
-
-    const container = mountRef.current;
-    if (!container) return;
-
-    const W = container.clientWidth || 700;
-    const H = container.clientHeight || 500;
-
-    // --- Physical & Geometric Constants (World Y coordinates) ---
-    const BED_Y = -1.95;            // Top surface of anvil where paper sits
-    const PLATE_H = 0.36;           // Thickness of press plate
-    const PAPER_W = 2.2;            // Sheet width
-    const PAPER_H = 3.0;            // Sheet original uncompressed height
-    const MIN_CRUSH_H = 0.12;       // Flattened pancake wafer thickness
-
-    // When plate bottom touches top of paper (world Y = BED_Y + PAPER_H = +1.05):
-    const PLATE_START_Y    = 3.8;
-    const PLATE_CONTACT_Y  = BED_Y + PAPER_H + PLATE_H / 2; // = 1.05 + 0.18 = 1.23
-    const PLATE_HALFWAY_Y  = BED_Y + PAPER_H * 0.48 + PLATE_H / 2; // = -1.95 + 1.44 + 0.18 = -0.33
-    const PLATE_SLAM_Y     = BED_Y + MIN_CRUSH_H + PLATE_H / 2;    // = -1.95 + 0.12 + 0.18 = -1.65
-
-    // Three.js setup
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0b0d13);
-    camera = new THREE.PerspectiveCamera(36, W / H, 0.1, 100);
-    camera.position.set(0, -0.1, 8.4);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(W, H);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    container.appendChild(renderer.domElement);
-
-    // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
-    scene.add(ambientLight);
-
-    const keyLight = new THREE.DirectionalLight(0xfff3e0, 2.8);
-    keyLight.position.set(3, 6, 4.5);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.width = 1024;
-    keyLight.shadow.mapSize.height = 1024;
-    keyLight.shadow.bias = -0.001;
-    scene.add(keyLight);
-
-    const fillLight = new THREE.DirectionalLight(0x60a5fa, 0.9);
-    fillLight.position.set(-4, 2, 3);
-    scene.add(fillLight);
-
-    const rimLight = new THREE.PointLight(0xf59e0b, 1.2, 10);
-    rimLight.position.set(0, -1.0, -1.5);
-    scene.add(rimLight);
-
-    // Anvil base
-    const anvil = new THREE.Mesh(
-      new THREE.BoxGeometry(5.2, 0.6, 2.2),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65, metalness: 0.6 })
-    );
-    anvil.position.set(0, BED_Y - 0.3, 0);
-    anvil.receiveShadow = true;
-    scene.add(anvil);
-
-    // Hazard stripes along front edge of anvil
-    const anvilStripe = new THREE.Mesh(
-      new THREE.BoxGeometry(5.2, 0.08, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.5 })
-    );
-    anvilStripe.position.set(0, BED_Y - 0.05, 1.11);
-    scene.add(anvilStripe);
-
-    // Press plate
-    const pressPlate = new THREE.Mesh(
-      new THREE.BoxGeometry(5.0, PLATE_H, 2.2),
-      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.35, metalness: 0.85 })
-    );
-    pressPlate.position.set(0, PLATE_START_Y, 0);
-    pressPlate.castShadow = true;
-    scene.add(pressPlate);
-
-    // Hazard stripe on front face of press plate
-    const plateStripe = new THREE.Mesh(
-      new THREE.BoxGeometry(5.0, 0.08, 0.02),
-      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4 })
-    );
-    plateStripe.position.set(0, -0.04, 1.11);
-    pressPlate.add(plateStripe);
-
-    // Hydraulic cylinders & steel rods
-    const rodMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.25, metalness: 0.95 });
-    [-1.7, 1.7].forEach(x => {
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 12, 20), rodMat);
-      rod.position.set(x, 0, 0);
-      scene.add(rod);
-    });
-
-    // Paper group — sits at BED_Y
-    const paperGrp = new THREE.Group();
-    paperGrp.position.set(7.5, BED_Y, 0);
-    scene.add(paperGrp);
-
-    // Paper Mesh (subdivided grid for smooth dynamic buckle and crumple)
-    const W_SEGS = 32;
-    const H_SEGS = 48;
-    const paperGeo = new THREE.PlaneGeometry(PAPER_W, PAPER_H, W_SEGS, H_SEGS);
-    // Shift geometry so bottom edge is at y=0, top edge at y=PAPER_H
-    paperGeo.translate(0, PAPER_H / 2, 0);
-
-    const paperMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      side: THREE.DoubleSide,
-      roughness: 0.75,
-      metalness: 0.05
-    });
-    const paperMesh = new THREE.Mesh(paperGeo, paperMat);
-    paperMesh.castShadow = true;
-    paperMesh.receiveShadow = true;
-    paperGrp.add(paperMesh);
-
-    // Cache initial vertices for deformation computations
-    const origPositions = Float32Array.from(paperGeo.attributes.position.array);
-
-    // Crease lines overlay
-    const creaseLines = [];
-    for (let i = 0; i < 9; i++) {
-      const mat = new THREE.LineBasicMaterial({ color: 0x090d16, transparent: true, opacity: 0 });
-      const normY = 0.1 + (i / 9) * 0.8 + (Math.random() - 0.5) * 0.04;
-      const pts = [
-        new THREE.Vector3(-PAPER_W * 0.48 + Math.random() * 0.1, normY * PAPER_H, 0.012),
-        new THREE.Vector3(PAPER_W * 0.48 - Math.random() * 0.1, (normY + (Math.random() - 0.5) * 0.06) * PAPER_H, 0.012)
-      ];
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
-      paperGrp.add(line);
-      creaseLines.push({ line, mat, normY, origPts: pts });
-    }
-
-    particles = new ParticleSystem(scene);
-
-    // Load real PDF texture
-    const fileObj = file instanceof File ? file : null;
-    loadPdfTexture(fileObj, 640, 900).then(texCanvas => {
-      if (isCleanedUp) return;
-      const tex = new THREE.CanvasTexture(texCanvas);
-      tex.needsUpdate = true;
-      paperMesh.material = new THREE.MeshStandardMaterial({
-        map: tex,
-        side: THREE.DoubleSide,
-        roughness: 0.7,
-        metalness: 0.05
+    latestComplete.current = onComplete;
+  }, [onComplete]);
+  useEffect(() => {
+    const element = canvas.current,
+      ctx = element.getContext("2d");
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    element.width = 720 * dpr;
+    element.height = 540 * dpr;
+    ctx.scale(dpr, dpr);
+    const s = { ...REST };
+    const draw = () => paint(ctx, mesh, s, phase);
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let timeline,
+      finished = false;
+    const finalState = () =>
+      Object.assign(s, {
+        x: 560,
+        bottom: 477,
+        fold: 1,
+        plate: 180,
+        angle: 0,
+        pressure: 0,
+        contact: false,
+        alpha: 1,
+        dust: 0,
+        shake: 0,
       });
-    });
-
-    // -------------------------------------------------------------
-    // Deformation Engine: Couples mesh vertices directly to plate Y
-    // -------------------------------------------------------------
-    let minPaperHSoFar = PAPER_H; // Never un-crush once deformed
-
-    function updateDeformation(plateY) {
-      const plateBottomY = plateY - PLATE_H / 2;
-      // How much clearance between plate and anvil bed:
-      const clearance = plateBottomY - BED_Y;
-      // Allowable current height under the plate
-      const currentAllowedH = Math.max(MIN_CRUSH_H, Math.min(PAPER_H, clearance));
-
-      // Record compression (paper retains deformation, doesn't bounce back on retract)
-      if (currentAllowedH < minPaperHSoFar) {
-        minPaperHSoFar = currentAllowedH;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      finalState();
+      draw();
+      setCaption("Small. Very, very small.");
+      latestComplete.current(runId);
+    };
+    const reduceNow = () => {
+      if (media.matches && phase === "compressing") {
+        timeline?.kill();
+        soundEngine.stopAll();
+        finish();
       }
-      const activeH = minPaperHSoFar;
-
-      // Crush fraction: 0 = untouched sheet, 1 = fully squashed wafer
-      const crushFrac = Math.max(0, Math.min(1, (PAPER_H - activeH) / (PAPER_H - MIN_CRUSH_H)));
-
-      const pos = paperGeo.attributes.position;
-      const count = pos.count;
-
-      for (let i = 0; i < count; i++) {
-        const origX = origPositions[i * 3 + 0];
-        const origY = origPositions[i * 3 + 1]; // 0 (bottom) .. PAPER_H (top)
-
-        // Normalized vertical position 0 (bed) .. 1 (plate)
-        const u = origY / PAPER_H;
-
-        // 1. Direct vertical compression: bottom stays at 0, top matches activeH
-        const newY = u * activeH;
-
-        // 2. Lateral bulge (accordion folds push paper outward left and right)
-        const arch = Math.sin(u * Math.PI); // 0 at bed and plate, peaks in middle
-        const lateralSpread = arch * crushFrac * 0.22 * Math.sign(origX);
-        const newX = origX + lateralSpread;
-
-        // 3. Realistic 3D buckling & accordion folds along Z normal
-        // Clamped to 0 at top and bottom so it never clips through plate or bed
-        let newZ = 0;
-        if (crushFrac > 0) {
-          const foldWave = Math.sin(u * Math.PI * 6.0) * 0.20;
-          const crinkleWave = Math.sin(u * Math.PI * 14.0 + origX * 3.0) * 0.08;
-          const creaseWave = Math.cos(u * Math.PI * 10.0 - origX * 4.0) * 0.05;
-          newZ = arch * Math.pow(crushFrac, 0.8) * (foldWave + crinkleWave + creaseWave);
-        }
-
-        pos.setXYZ(i, newX, newY, newZ);
-      }
-
-      pos.needsUpdate = true;
-      paperGeo.computeVertexNormals();
-
-      // Update crease lines
-      creaseLines.forEach(({ line, mat, normY, origPts }) => {
-        mat.opacity = Math.min(0.9, crushFrac * 1.5);
-        const linePos = line.geometry.attributes.position;
-        if (linePos) {
-          origPts.forEach((p, idx) => {
-            const lineY = normY * activeH;
-            const lineZ = Math.sin(normY * Math.PI) * crushFrac * 0.18 + 0.01;
-            linePos.setXYZ(idx, p.x * (1 + crushFrac * 0.1), lineY, lineZ);
-          });
-          linePos.needsUpdate = true;
-        }
-      });
-
-      return { crushFrac, activeH };
+    };
+    if (phase === "complete") {
+      finalState();
+      setCaption("Small. Very, very small.");
+      draw();
+    } else if (phase !== "compressing" || !mesh) {
+      setCaption(
+        phase === "ready"
+          ? "Your file. Its moment of truth."
+          : phase === "preparing"
+            ? "Getting your paper ready…"
+            : "Ready when you are.",
+      );
+      draw();
+    } else if (media.matches) {
+      finalState();
+      s.alpha = 0.1;
+      setCaption("A little pressure…");
+      timeline = gsap
+        .timeline({ onUpdate: draw, onComplete: finish })
+        .to(s, { alpha: 1, duration: 0.45, ease: "none" });
+    } else {
+      setCaption("Coming right up.");
+      timeline = gsap.timeline({ onUpdate: draw, onComplete: finish });
+      timeline
+        .to(s, { x: 347, angle: 0, duration: 1.15, ease: "power2.inOut" }, 0)
+        .to(s, { angle: 0.025, duration: 0.12, repeat: 3, yoyo: true }, 1.16)
+        .to(s, { angle: 0, duration: 0.1 }, 1.65)
+        .call(
+          () => {
+            setCaption("A little pressure…");
+            soundEngine.playHydraulicHiss();
+          },
+          [],
+          1.65,
+        )
+        .to(
+          s,
+          {
+            plate:
+              390 -
+              (paperBounds(mesh, 0).maxY - paperBounds(mesh, 0).minY) * 190,
+            pressure: 0.3,
+            duration: 1.05,
+            ease: "power1.in",
+          },
+          1.7,
+        )
+        .call(
+          () => {
+            s.contact = true;
+            soundEngine.playCrunch();
+            setCaption("Not the margins!");
+          },
+          [],
+          2.75,
+        )
+        .to(
+          s,
+          { fold: 1, pressure: 1, duration: 1.6, ease: "power2.inOut" },
+          2.75,
+        )
+        .call(
+          () => {
+            soundEngine.playCrunch();
+            s.dust = 1;
+            s.shake = 1;
+          },
+          [],
+          4.3,
+        )
+        .to(s, { dust: 0, shake: 0, duration: 0.65 }, 4.31)
+        .call(
+          () => {
+            s.plate =
+              390 - (paperBounds(mesh).maxY - paperBounds(mesh).minY) * 190;
+            s.contact = false;
+            soundEngine.playHydraulicHiss();
+            setCaption("One compact little masterpiece.");
+          },
+          [],
+          4.85,
+        )
+        .to(
+          s,
+          { plate: 180, pressure: 0, duration: 0.95, ease: "power2.out" },
+          4.85,
+        )
+        .to(s, { x: 560, duration: 0.85, ease: "power1.inOut" }, 5.85)
+        .to(s, { bottom: 477, duration: 0.85, ease: "bounce.out" }, 6.25)
+        .to(s, { duration: 0.25 }, 7.1);
+      draw();
     }
-
-    soundEngine.init?.();
-
-    // -------------------------------------------------------------
-    // GSAP Master Timeline (7.6 seconds total)
-    // -------------------------------------------------------------
-    const animState = {
-      paperX: 7.5,
-      plateY: PLATE_START_Y,
-      pressurePsi: 0,
-    };
-
-    tl = gsap.timeline();
-
-    // PHASE 1: Slide paper in onto the press bed (0 - 1.1s)
-    tl.to(animState, {
-      paperX: 0,
-      duration: 1.1,
-      ease: "power2.out",
-      onUpdate: () => {
-        paperGrp.position.x = animState.paperX;
-      },
-    });
-
-    // PHASE 2: Fast descent until plate gently touches top of paper (1.1 - 2.0s)
-    tl.to(animState, {
-      plateY: PLATE_CONTACT_Y,
-      duration: 0.9,
-      ease: "power1.in",
-      onStart: () => {
-        soundEngine.playHydraulicHiss?.();
-      },
-      onUpdate: () => {
-        pressPlate.position.y = animState.plateY;
-        updateDeformation(animState.plateY);
-      },
-    });
-
-    // PHASE 3: Slow crushing & buckling down to halfway (2.0 - 3.8s)
-    // Synchronized live deformation: mesh visibly crinkles, buckles and spreads as plate pushes down!
-    tl.to(animState, {
-      plateY: PLATE_HALFWAY_Y,
-      pressurePsi: 1400,
-      duration: 1.8,
-      ease: "sine.inOut",
-      onStart: () => {
-        particles.spawn(-1.1, BED_Y + 0.1, 0.4, 15, 0xf8fafc);
-        particles.spawn( 1.1, BED_Y + 0.1, 0.4, 15, 0xf8fafc);
-      },
-      onUpdate: () => {
-        pressPlate.position.y = animState.plateY;
-        updateDeformation(animState.plateY);
-        if (gaugeRef.current) {
-          gaugeRef.current.style.transform = `rotate(${-60 + (animState.pressurePsi / 3500) * 180}deg)`;
-        }
-        if (psiValueRef.current) {
-          psiValueRef.current.textContent = Math.round(animState.pressurePsi);
-        }
-      },
-    });
-
-    // PHASE 4: The Hesitation / Pressure Build (3.8 - 4.4s)
-    // Machine hesitates, pressure jumps violently, gauge needle quivers!
-    tl.to(animState, {
-      duration: 0.6,
-      onStart: () => {
-        soundEngine.playHydraulicHiss?.();
-        // Needle jitter
-        gsap.to(animState, {
-          pressurePsi: 2400,
-          duration: 0.6,
-          ease: "rough({strength: 2, points: 15, randomize: true})",
-          onUpdate: () => {
-            if (gaugeRef.current) {
-              const jitter = (Math.random() - 0.5) * 6;
-              gaugeRef.current.style.transform = `rotate(${-60 + (animState.pressurePsi / 3500) * 180 + jitter}deg)`;
-            }
-            if (psiValueRef.current) {
-              psiValueRef.current.textContent = Math.round(animState.pressurePsi);
-            }
-          },
-        });
-        // Subtle machine vibration
-        gsap.to(camera.position, {
-          x: "random(-0.02, 0.02)",
-          y: "random(-0.12, -0.08)",
-          duration: 0.05,
-          repeat: 10,
-          yoyo: true,
-          ease: "none",
-        });
-      },
-      onUpdate: () => {
-        pressPlate.position.y = animState.plateY;
-        updateDeformation(animState.plateY);
-      },
-    });
-
-    // PHASE 5: THE SLAM! (4.4 - 4.75s)
-    // Instant explosive slam flattening paper into a paper wafer!
-    tl.to(animState, {
-      plateY: PLATE_SLAM_Y,
-      pressurePsi: 3500,
-      duration: 0.35,
-      ease: "power4.in",
-      onStart: () => {
-        soundEngine.playCrunch?.();
-        // Explosive burst of paper dust and shredded fibres
-        particles.spawn(-1.1, BED_Y + 0.08, 0.5, 45, 0xffffff);
-        particles.spawn( 1.1, BED_Y + 0.08, 0.5, 45, 0xffffff);
-        particles.spawn(-0.5, BED_Y + 0.08, 0.6, 30, 0xef4444);
-        particles.spawn( 0.5, BED_Y + 0.08, 0.6, 30, 0x38bdf8);
-        particles.spawn( 0.0, BED_Y + 0.08, 0.7, 40, 0xf1f5f9);
-
-        // Heavy camera shake
-        gsap.to(camera.position, {
-          x: "random(-0.25, 0.25)",
-          y: "random(-0.3, 0.1)",
-          duration: 0.04,
-          repeat: 14,
-          yoyo: true,
-          ease: "none",
-          onComplete: () => {
-            camera.position.set(0, -0.1, 8.4);
-          },
-        });
-      },
-      onUpdate: () => {
-        pressPlate.position.y = animState.plateY;
-        updateDeformation(animState.plateY);
-        if (gaugeRef.current) {
-          gaugeRef.current.style.transform = `rotate(${-60 + (animState.pressurePsi / 3500) * 180}deg)`;
-        }
-        if (psiValueRef.current) {
-          psiValueRef.current.textContent = Math.round(animState.pressurePsi);
-        }
-      },
-    });
-
-    // PHASE 6: Hold at maximum compression (4.75 - 5.5s)
-    tl.to(animState, {
-      duration: 0.75,
-      onStart: () => {
-        particles.spawn(0, BED_Y + 0.08, 0.5, 20, 0xe2e8f0);
-      },
-      onUpdate: () => {
-        pressPlate.position.y = animState.plateY;
-        updateDeformation(animState.plateY);
-      },
-    });
-
-    // PHASE 7: Retract press plate (5.5 - 6.8s)
-    // Plate retracts up, leaving behind the mangled crushed paper pancake!
-    tl.to(animState, {
-      plateY: PLATE_START_Y,
-      pressurePsi: 0,
-      duration: 1.3,
-      ease: "power2.out",
-      onStart: () => {
-        soundEngine.playHydraulicHiss?.();
-      },
-      onUpdate: () => {
-        pressPlate.position.y = animState.plateY;
-        updateDeformation(animState.plateY);
-        if (gaugeRef.current) {
-          gaugeRef.current.style.transform = `rotate(${-60 + (animState.pressurePsi / 3500) * 180}deg)`;
-        }
-        if (psiValueRef.current) {
-          psiValueRef.current.textContent = Math.round(animState.pressurePsi);
-        }
-      },
-    });
-
-    // PHASE 8: Dramatic Camera Zoom on Wreckage (6.8 - 7.8s)
-    // Zooms in tightly to show the crushed document pancake in detail
-    tl.to(camera.position, {
-      x: 0,
-      y: BED_Y + 0.4,
-      z: 5.6,
-      duration: 1.0,
-      ease: "power2.inOut",
-      onComplete: () => {
-        if (isCleanedUp) return;
-        try {
-          renderer.render(scene, camera);
-          renderer.domElement.toBlob(blob => {
-            if (!isCleanedUp && onComplete) onComplete(blob);
-          }, "image/png");
-        } catch {
-          if (!isCleanedUp && onComplete) onComplete(null);
-        }
-      },
-    });
-
-    // Render loop
-    const renderLoop = () => {
-      if (isCleanedUp) return;
-      particles.update();
-      renderer.render(scene, camera);
-      rafId = requestAnimationFrame(renderLoop);
-    };
-    rafId = requestAnimationFrame(renderLoop);
-
+    media.addEventListener("change", reduceNow);
     return () => {
-      isCleanedUp = true;
-      cancelAnimationFrame(rafId);
-      tl?.kill();
-      particles?.dispose();
-      renderer?.dispose();
-      if (renderer?.domElement?.parentNode === container) {
-        container.removeChild(renderer.domElement);
-      }
+      timeline?.kill();
+      media.removeEventListener("change", reduceNow);
     };
-  }, [fileName, file, onComplete]);
-
+  }, [mesh, phase, runId]);
   return (
-    <div className="w-full h-full flex flex-col items-center justify-between relative overflow-hidden select-none bg-slate-950 rounded-2xl">
-      <div className="absolute top-4 left-5 right-5 z-20 flex items-center justify-between pointer-events-none">
-        <div className="flex items-center gap-2">
-          <span className="text-2xl">⚡</span>
-          <div>
-            <div className="font-display font-black text-sm text-amber-400 tracking-wider">
-              HYDRAULIC CRUSHR MK-V
-            </div>
-            <div className="font-mono-tech text-[10px] text-slate-400 truncate max-w-[180px]">
-              TARGET: {fileName || "document.pdf"}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-700 px-3 py-2 rounded-2xl shadow-xl">
-          <div className="relative w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-950 flex items-center justify-center">
-            <div
-              ref={gaugeRef}
-              className="absolute w-0.5 h-4 bg-red-500 origin-bottom rounded"
-              style={{ transform: "rotate(-60deg)", bottom: "50%" }}
-            />
-            <div className="w-2 h-2 bg-amber-400 rounded-full z-10" />
-          </div>
-          <div className="text-[10px] font-mono-tech text-slate-300">
-            <div className="text-amber-400 font-bold">PSI</div>
-            <div ref={psiValueRef} className="text-white font-black text-sm tabular-nums">0</div>
-          </div>
-        </div>
-      </div>
-      <div ref={mountRef} className="w-full h-full" />
+    <div className="machine-scene">
+      <canvas
+        ref={canvas}
+        className="machine-canvas"
+        role="img"
+        aria-label={
+          phase === "complete"
+            ? "Your crumpled document resting in the output tray"
+            : "An illustrated hydraulic press folding your document into a paper ball"
+        }
+      />
+      <p className="machine-caption" role="status" aria-live="polite">
+        {caption}
+      </p>
     </div>
   );
 }

@@ -5,22 +5,34 @@ class SoundEngine {
     this.muted = false;
     this.screamMuted = false;
     this.masterVolume = 0.8;
+    this.output = null;
   }
 
   init() {
+    if (this.muted) return;
     if (!this.ctx) {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (AudioContext) {
-        this.ctx = new AudioContext();
+        try {
+          this.ctx = new AudioContext();
+        } catch {
+          return;
+        }
       }
     }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
+    if (this.ctx && this.ctx.state === "suspended") {
+      this.ctx.resume().catch(() => {});
     }
   }
 
   setMuted(muted) {
     this.muted = muted;
+    if (this.ctx && this.output)
+      this.output.gain.setValueAtTime(
+        muted ? 0 : this.masterVolume,
+        this.ctx.currentTime,
+      );
+    if (muted) window.speechSynthesis?.cancel();
   }
 
   setScreamMuted(muted) {
@@ -33,10 +45,25 @@ class SoundEngine {
 
   getMasterGain() {
     if (!this.ctx || this.muted) return null;
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(this.masterVolume, this.ctx.currentTime);
-    gain.connect(this.ctx.destination);
-    return gain;
+    if (!this.output) {
+      this.output = this.ctx.createGain();
+      this.output.gain.setValueAtTime(this.masterVolume, this.ctx.currentTime);
+      this.output.connect(this.ctx.destination);
+    }
+    return this.output;
+  }
+
+  stopAll() {
+    this.output?.disconnect();
+    this.output = null;
+    const context = this.ctx;
+    this.ctx = null;
+    if (context && context.state !== "closed") context.close().catch(() => {});
+    window.speechSynthesis?.cancel();
+  }
+
+  dispose() {
+    this.stopAll();
   }
 
   // Create White/Pink Noise Buffer
@@ -62,7 +89,7 @@ class SoundEngine {
     const noise = this.ctx.createBufferSource();
     noise.buffer = this.createNoiseBuffer(1.8);
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
+    filter.type = "bandpass";
     filter.frequency.setValueAtTime(1200, now);
     filter.frequency.exponentialRampToValueAtTime(300, now + 1.8);
     filter.Q.setValueAtTime(3, now);
@@ -88,7 +115,7 @@ class SoundEngine {
     // Heavy Sub Thud
     const osc = this.ctx.createOscillator();
     const oscGain = this.ctx.createGain();
-    osc.type = 'triangle';
+    osc.type = "triangle";
     osc.frequency.setValueAtTime(160, now);
     osc.frequency.exponentialRampToValueAtTime(25, now + 0.6);
     oscGain.gain.setValueAtTime(1.0, now);
@@ -102,7 +129,7 @@ class SoundEngine {
     const noise = this.ctx.createBufferSource();
     noise.buffer = this.createNoiseBuffer(0.5);
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
+    filter.type = "lowpass";
     filter.frequency.setValueAtTime(3500, now);
     filter.frequency.exponentialRampToValueAtTime(400, now + 0.4);
 
@@ -127,7 +154,7 @@ class SoundEngine {
     // Mega Thud
     const sub = this.ctx.createOscillator();
     const subGain = this.ctx.createGain();
-    sub.type = 'sine';
+    sub.type = "sine";
     sub.frequency.setValueAtTime(140, now);
     sub.frequency.exponentialRampToValueAtTime(18, now + 0.9);
     subGain.gain.setValueAtTime(1.2, now);
@@ -140,7 +167,7 @@ class SoundEngine {
     // Trumpet squawk
     const horn = this.ctx.createOscillator();
     const hornGain = this.ctx.createGain();
-    horn.type = 'sawtooth';
+    horn.type = "sawtooth";
     horn.frequency.setValueAtTime(320, now + 0.05);
     horn.frequency.linearRampToValueAtTime(580, now + 0.25);
     horn.frequency.exponentialRampToValueAtTime(180, now + 0.6);
@@ -163,7 +190,7 @@ class SoundEngine {
     const whoosh = this.ctx.createBufferSource();
     whoosh.buffer = this.createNoiseBuffer(0.8);
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
+    filter.type = "bandpass";
     filter.frequency.setValueAtTime(200, now);
     filter.frequency.linearRampToValueAtTime(1200, now + 0.5);
     const whooshGain = this.ctx.createGain();
@@ -183,7 +210,7 @@ class SoundEngine {
       [540, 890, 1420].forEach((freq) => {
         const ring = this.ctx.createOscillator();
         const rGain = this.ctx.createGain();
-        ring.type = 'sine';
+        ring.type = "sine";
         ring.frequency.setValueAtTime(freq, t);
         ring.frequency.exponentialRampToValueAtTime(freq * 0.9, t + 0.7);
         rGain.gain.setValueAtTime(0.2, t);
@@ -207,7 +234,7 @@ class SoundEngine {
     const roar = this.ctx.createBufferSource();
     roar.buffer = this.createNoiseBuffer(3.5);
     const roarFilter = this.ctx.createBiquadFilter();
-    roarFilter.type = 'lowpass';
+    roarFilter.type = "lowpass";
     roarFilter.frequency.setValueAtTime(300, now);
     roarFilter.frequency.linearRampToValueAtTime(2400, now + 2.5);
 
@@ -232,7 +259,7 @@ class SoundEngine {
 
     const motor = this.ctx.createOscillator();
     const motorGain = this.ctx.createGain();
-    motor.type = 'sawtooth';
+    motor.type = "sawtooth";
     motor.frequency.setValueAtTime(100, now);
     motor.frequency.linearRampToValueAtTime(750, now + 0.8);
     motor.frequency.linearRampToValueAtTime(650, now + 2.2);
@@ -247,21 +274,24 @@ class SoundEngine {
 
     // Wet liquid drops
     for (let i = 0; i < 5; i++) {
-      setTimeout(() => {
-        if (!this.ctx || this.muted) return;
-        const dripTime = this.ctx.currentTime;
-        const drip = this.ctx.createOscillator();
-        const dripG = this.ctx.createGain();
-        drip.type = 'sine';
-        drip.frequency.setValueAtTime(900 + Math.random() * 600, dripTime);
-        drip.frequency.exponentialRampToValueAtTime(300, dripTime + 0.15);
-        dripG.gain.setValueAtTime(0.2, dripTime);
-        dripG.gain.exponentialRampToValueAtTime(0.01, dripTime + 0.15);
-        drip.connect(dripG);
-        dripG.connect(this.ctx.destination);
-        drip.start(dripTime);
-        drip.stop(dripTime + 0.15);
-      }, 500 + i * 350);
+      setTimeout(
+        () => {
+          if (!this.ctx || this.muted) return;
+          const dripTime = this.ctx.currentTime;
+          const drip = this.ctx.createOscillator();
+          const dripG = this.ctx.createGain();
+          drip.type = "sine";
+          drip.frequency.setValueAtTime(900 + Math.random() * 600, dripTime);
+          drip.frequency.exponentialRampToValueAtTime(300, dripTime + 0.15);
+          dripG.gain.setValueAtTime(0.2, dripTime);
+          dripG.gain.exponentialRampToValueAtTime(0.01, dripTime + 0.15);
+          drip.connect(dripG);
+          dripG.connect(this.ctx.destination);
+          drip.start(dripTime);
+          drip.stop(dripTime + 0.15);
+        },
+        500 + i * 350,
+      );
     }
   }
 
@@ -274,7 +304,7 @@ class SoundEngine {
 
     const drone = this.ctx.createOscillator();
     const droneGain = this.ctx.createGain();
-    drone.type = 'sawtooth';
+    drone.type = "sawtooth";
     drone.frequency.setValueAtTime(65, now);
     drone.frequency.linearRampToValueAtTime(95, now + 2.0);
     droneGain.gain.setValueAtTime(0.4, now);
@@ -287,7 +317,7 @@ class SoundEngine {
     // Metal groan
     const screech = this.ctx.createOscillator();
     const sGain = this.ctx.createGain();
-    screech.type = 'triangle';
+    screech.type = "triangle";
     screech.frequency.setValueAtTime(820, now + 0.6);
     screech.frequency.linearRampToValueAtTime(1150, now + 1.6);
     sGain.gain.setValueAtTime(0.25, now + 0.6);
@@ -308,7 +338,7 @@ class SoundEngine {
     // Low engine rumble
     const engine = this.ctx.createOscillator();
     const engineGain = this.ctx.createGain();
-    engine.type = 'square';
+    engine.type = "square";
     engine.frequency.setValueAtTime(45, now);
     engineGain.gain.setValueAtTime(0.35, now);
     engineGain.gain.exponentialRampToValueAtTime(0.01, now + 1.8);
@@ -324,7 +354,7 @@ class SoundEngine {
       const dur = idx === 3 ? 0.9 : 0.28;
       const trom = this.ctx.createOscillator();
       const tGain = this.ctx.createGain();
-      trom.type = 'sawtooth';
+      trom.type = "sawtooth";
       trom.frequency.setValueAtTime(freq, noteStart);
       if (idx === 3) {
         trom.frequency.linearRampToValueAtTime(freq - 30, noteStart + dur);
@@ -348,7 +378,7 @@ class SoundEngine {
     // AC Hum
     const hum = this.ctx.createOscillator();
     const humGain = this.ctx.createGain();
-    hum.type = 'sawtooth';
+    hum.type = "sawtooth";
     hum.frequency.setValueAtTime(120, now);
     humGain.gain.setValueAtTime(0.2, now);
     humGain.gain.exponentialRampToValueAtTime(0.01, now + 2.0);
@@ -365,7 +395,7 @@ class SoundEngine {
         const spark = this.ctx.createBufferSource();
         spark.buffer = this.createNoiseBuffer(0.12);
         const filter = this.ctx.createBiquadFilter();
-        filter.type = 'highpass';
+        filter.type = "highpass";
         filter.frequency.setValueAtTime(3000, t);
         const sG = this.ctx.createGain();
         sG.gain.setValueAtTime(0.8, t);
@@ -388,7 +418,7 @@ class SoundEngine {
     const noise = this.ctx.createBufferSource();
     noise.buffer = this.createNoiseBuffer(2.2);
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
+    filter.type = "bandpass";
     filter.frequency.setValueAtTime(1800, now);
     filter.Q.setValueAtTime(1.5, now);
 
@@ -412,7 +442,7 @@ class SoundEngine {
 
     const osc = this.ctx.createOscillator();
     const oscG = this.ctx.createGain();
-    osc.type = 'triangle';
+    osc.type = "triangle";
     const baseFreq = 220 + stage * 160;
     osc.frequency.setValueAtTime(baseFreq, now);
     osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.4, now + 0.2);
@@ -434,7 +464,7 @@ class SoundEngine {
     // Bat crack
     const osc = this.ctx.createOscillator();
     const oscG = this.ctx.createGain();
-    osc.type = 'square';
+    osc.type = "square";
     osc.frequency.setValueAtTime(380, now);
     osc.frequency.exponentialRampToValueAtTime(60, now + 0.2);
     oscG.gain.setValueAtTime(0.8, now);
@@ -446,20 +476,23 @@ class SoundEngine {
 
     // Candy chime cascade
     [880, 1046, 1318, 1567, 1760, 2093].forEach((f, idx) => {
-      setTimeout(() => {
-        if (!this.ctx || this.muted) return;
-        const t = this.ctx.currentTime;
-        const chime = this.ctx.createOscillator();
-        const cG = this.ctx.createGain();
-        chime.type = 'sine';
-        chime.frequency.setValueAtTime(f, t);
-        cG.gain.setValueAtTime(0.15, t);
-        cG.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-        chime.connect(cG);
-        cG.connect(this.ctx.destination);
-        chime.start(t);
-        chime.stop(t + 0.3);
-      }, 150 + idx * 60);
+      setTimeout(
+        () => {
+          if (!this.ctx || this.muted) return;
+          const t = this.ctx.currentTime;
+          const chime = this.ctx.createOscillator();
+          const cG = this.ctx.createGain();
+          chime.type = "sine";
+          chime.frequency.setValueAtTime(f, t);
+          cG.gain.setValueAtTime(0.15, t);
+          cG.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+          chime.connect(cG);
+          cG.connect(this.ctx.destination);
+          chime.start(t);
+          chime.stop(t + 0.3);
+        },
+        150 + idx * 60,
+      );
     });
   }
 
@@ -473,8 +506,8 @@ class SoundEngine {
     const osc1 = this.ctx.createOscillator();
     const osc2 = this.ctx.createOscillator();
     const g = this.ctx.createGain();
-    osc1.type = 'sine';
-    osc2.type = 'triangle';
+    osc1.type = "sine";
+    osc2.type = "triangle";
 
     osc1.frequency.setValueAtTime(600, now);
     osc1.frequency.exponentialRampToValueAtTime(40, now + 2.5);
@@ -504,7 +537,7 @@ class SoundEngine {
     const noise = this.ctx.createBufferSource();
     noise.buffer = this.createNoiseBuffer(3.0);
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
+    filter.type = "lowpass";
     filter.frequency.setValueAtTime(150, now);
     filter.frequency.linearRampToValueAtTime(800, now + 1.2);
     filter.frequency.exponentialRampToValueAtTime(80, now + 3.0);
@@ -529,7 +562,7 @@ class SoundEngine {
 
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
-    osc.type = 'sine';
+    osc.type = "sine";
     osc.frequency.setValueAtTime(3200, now);
     osc.frequency.exponentialRampToValueAtTime(4200, now + 0.08);
     g.gain.setValueAtTime(0.2, now);
@@ -549,7 +582,7 @@ class SoundEngine {
 
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
-    osc.type = 'sawtooth';
+    osc.type = "sawtooth";
     osc.frequency.setValueAtTime(700, now);
     osc.frequency.linearRampToValueAtTime(1200, now + 0.35);
     osc.frequency.linearRampToValueAtTime(700, now + 0.7);
@@ -572,14 +605,14 @@ class SoundEngine {
       { f: 220, d: 0.6 },
       { f: 261.63, d: 0.4 },
       { f: 246.94, d: 0.2 },
-      { f: 220, d: 0.8 }
+      { f: 220, d: 0.8 },
     ];
 
     let t = this.ctx.currentTime;
     notes.forEach((note) => {
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
-      osc.type = 'sawtooth';
+      osc.type = "sawtooth";
       osc.frequency.setValueAtTime(note.f, t);
       g.gain.setValueAtTime(0.18, t);
       g.gain.exponentialRampToValueAtTime(0.001, t + note.d);
@@ -594,7 +627,7 @@ class SoundEngine {
   // Web Speech API: File screams and funny one-liners!
   scream(text) {
     if (this.screamMuted || this.muted) return;
-    if (!('speechSynthesis' in window)) return;
+    if (!("speechSynthesis" in window)) return;
     try {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -608,48 +641,49 @@ class SoundEngine {
   }
 
   toggleMute() {
-    this.muted = !this.muted;
+    this.setMuted(!this.muted);
+    if (!this.muted) this.init();
     return this.muted;
   }
 
   playMachineSound(machineKey) {
     if (this.muted) return;
     switch (machineKey) {
-      case 'HydraulicPress':
+      case "HydraulicPress":
         this.playHydraulicHiss();
         setTimeout(() => this.playCrunch(), 1400);
         break;
-      case 'ElephantStomp':
+      case "ElephantStomp":
         this.playElephantStomp();
         break;
-      case 'WreckingBall':
+      case "WreckingBall":
         this.playWreckingBall();
         break;
-      case 'RocketLaunch':
+      case "RocketLaunch":
         this.playRocketLaunch();
         break;
-      case 'Juicer':
+      case "Juicer":
         this.playJuicer();
         break;
-      case 'TrashCompactor':
+      case "TrashCompactor":
         this.playTrashCompactor();
         break;
-      case 'Steamroller':
+      case "Steamroller":
         this.playSteamroller();
         break;
-      case 'BugZapper':
+      case "BugZapper":
         this.playBugZapper();
         break;
-      case 'Shredder':
+      case "Shredder":
         this.playShredder();
         break;
-      case 'Matryoshka':
+      case "Matryoshka":
         this.playMatryoshkaSmash(1);
         setTimeout(() => this.playMatryoshkaSmash(2), 1200);
         setTimeout(() => this.playMatryoshkaSmash(3), 2400);
         setTimeout(() => this.playMatryoshkaSmash(4), 3600);
         break;
-      case 'BlackHole':
+      case "BlackHole":
       default:
         this.playBlackHole();
         break;
