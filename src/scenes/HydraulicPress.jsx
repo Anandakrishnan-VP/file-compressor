@@ -1,625 +1,498 @@
-import React, { useEffect, useRef } from 'react';
-import Matter from 'matter-js';
-import gsap from 'gsap';
-import { soundEngine } from '../utils/soundEngine';
+import React, { useEffect, useRef } from "react";
+import * as THREE from "three";
+import gsap from "gsap";
+import { soundEngine } from "../utils/soundEngine";
 
-/**
- * Creates a high-fidelity replica of a PDF document on an offscreen canvas.
- * Exactly renders an A4 page with Adobe-style badge, actual filename,
- * text lines, image placeholder, and realistic paper styling.
- */
-export function createFileReplica(width = 240, height = 340, fileName = 'document.pdf') {
-  const canvas = document.createElement('canvas');
-  canvas.width = width * 2; // Retina 2x scale
-  canvas.height = height * 2;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(2, 2);
+/* -------------------------------------------------------------
+   PDF TEXTURE LOADER
+   Renders page-1 of the real PDF onto a canvas. Falls back to
+   a white A4 replica with the file name on it.
+------------------------------------------------------------- */
+async function loadPdfTexture(file, targetW = 600, targetH = 848) {
+  try {
+    if (!file) throw new Error("no file");
+    const pdfjsLib = await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/build/pdf.worker.min.mjs",
+      import.meta.url
+    ).href;
 
-  // 1. Paper Base with subtle warmth & shadow
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.roundRect(0, 0, width, height, [6, 6, 6, 6]);
-  ctx.fill();
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 1 });
+    const scale = Math.min(targetW / viewport.width, targetH / viewport.height) * 2;
+    const scaledViewport = page.getViewport({ scale });
 
-  // Subtle border
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // 2. Top Red Adobe-style PDF Banner / Badge
-  const badgeWidth = 42;
-  const badgeHeight = 24;
-  ctx.fillStyle = '#dc2626'; // Adobe Crimson
-  ctx.beginPath();
-  ctx.roundRect(16, 16, badgeWidth, badgeHeight, [4, 4, 4, 4]);
-  ctx.fill();
-
-  // "PDF" text inside badge
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 11px Inter, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('PDF', 16 + badgeWidth / 2, 16 + badgeHeight / 2);
-
-  // 3. Document Title Bar (with user's actual file name)
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#0f172a';
-  ctx.font = 'bold 12px Inter, sans-serif';
-  
-  // Truncate file name cleanly
-  const maxTitleWidth = width - 85;
-  let displayTitle = fileName || 'document.pdf';
-  if (ctx.measureText(displayTitle).width > maxTitleWidth) {
-    while (ctx.measureText(displayTitle + '...').width > maxTitleWidth && displayTitle.length > 0) {
-      displayTitle = displayTitle.slice(0, -1);
-    }
-    displayTitle += '...';
+    const canvas = document.createElement("canvas");
+    canvas.width = scaledViewport.width;
+    canvas.height = scaledViewport.height;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
+    return canvas;
+  } catch (e) {
+    console.warn("[CRUSHR] PDF render failed, using fallback:", e?.message ?? e);
+    return buildFallbackTexture(targetW * 2, targetH * 2, file?.name ?? "document.pdf");
   }
-  ctx.fillText(displayTitle, 66, 26);
+}
 
-  // Subtitle / metadata
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '9px "JetBrains Mono", monospace';
-  ctx.fillText('Adobe Acrobat Document • A4 Standard', 66, 38);
+function buildFallbackTexture(w = 1200, h = 1696, fileName = "document.pdf") {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
 
-  // Red accent divider
-  ctx.strokeStyle = '#ef4444';
-  ctx.lineWidth = 1.5;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+
+  // PDF badge
+  ctx.fillStyle = "#dc2626";
   ctx.beginPath();
-  ctx.moveTo(16, 48);
-  ctx.lineTo(width - 16, 48);
+  ctx.roundRect(40, 40, 100, 56, 10);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 52px Inter, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("PDF", 90, 80);
+
+  // File name
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "bold 40px Inter, sans-serif";
+  ctx.textAlign = "left";
+  let displayName = fileName;
+  const maxW = w - 200;
+  while (ctx.measureText(displayName).width > maxW && displayName.length > 4) {
+    displayName = displayName.slice(0, -1);
+  }
+  if (displayName !== fileName) displayName += "...";
+  ctx.fillText(displayName, 160, 78);
+
+  ctx.strokeStyle = "#ef4444";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(40, 116);
+  ctx.lineTo(w - 40, 116);
   ctx.stroke();
 
-  // 4. Headline Placeholder
-  ctx.fillStyle = '#1e293b';
-  ctx.fillRect(16, 62, 110, 8);
-
-  // 5. Paragraph Text Lines
-  ctx.fillStyle = '#cbd5e1';
-  const lines1 = [
-    { w: width - 32, y: 78 },
-    { w: width - 48, y: 88 },
-    { w: width - 64, y: 98 },
-    { w: width - 40, y: 108 },
-  ];
-  lines1.forEach(l => {
+  ctx.fillStyle = "#1e293b";
+  ctx.fillRect(40, 150, 300, 22);
+  ctx.fillStyle = "#cbd5e1";
+  [w - 100, w - 160, w - 130, w - 180, w - 110].forEach((lw, i) => {
     ctx.beginPath();
-    ctx.roundRect(16, l.y, l.w, 4, [2, 2, 2, 2]);
+    ctx.roundRect(40, 190 + i * 30, lw, 14, 6);
     ctx.fill();
   });
 
-  // 6. Embedded Image / Chart Box
-  const imgX = 16;
-  const imgY = 124;
-  const imgW = width - 32;
-  const imgH = 82;
-  
-  // Image Box Background
-  const grad = ctx.createLinearGradient(imgX, imgY, imgX + imgW, imgY + imgH);
-  grad.addColorStop(0, '#f1f5f9');
-  grad.addColorStop(1, '#e2e8f0');
+  const cx = 40, cy = 360, cw = w - 80, ch = 240;
+  const grad = ctx.createLinearGradient(cx, cy, cx + cw, cy + ch);
+  grad.addColorStop(0, "#f1f5f9");
+  grad.addColorStop(1, "#e2e8f0");
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.roundRect(imgX, imgY, imgW, imgH, [4, 4, 4, 4]);
+  ctx.roundRect(cx, cy, cw, ch, 10);
   ctx.fill();
-  ctx.strokeStyle = '#cbd5e1';
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-
-  // Image diagram graphics inside
-  ctx.fillStyle = '#38bdf8';
-  ctx.fillRect(imgX + 16, imgY + 45, 18, 26);
-  ctx.fillStyle = '#818cf8';
-  ctx.fillRect(imgX + 42, imgY + 32, 18, 39);
-  ctx.fillStyle = '#f43f5e';
-  ctx.fillRect(imgX + 68, imgY + 20, 18, 51);
-  ctx.fillStyle = '#10b981';
-  ctx.fillRect(imgX + 94, imgY + 38, 18, 33);
-
-  // Chart axes
-  ctx.strokeStyle = '#94a3b8';
+  ctx.strokeStyle = "#cbd5e1";
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(imgX + 10, imgY + 72);
-  ctx.lineTo(imgX + imgW - 10, imgY + 72);
   ctx.stroke();
+  ["#38bdf8", "#818cf8", "#f43f5e", "#10b981", "#f59e0b"].forEach((col, i) => {
+    const barH = 80 + Math.sin(i * 1.3) * 60;
+    ctx.fillStyle = col;
+    ctx.fillRect(cx + 40 + i * 100, cy + ch - barH - 20, 60, barH);
+  });
 
-  // Image caption
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = 'italic 8px Inter, sans-serif';
-  ctx.fillText('Figure 1.1: Compression Metrics & Redundancy Distribution', imgX + 10, imgY + imgH + 12);
-
-  // 7. Secondary Paragraph Lines (Two-column layout)
-  const colW = (width - 40) / 2;
-  ctx.fillStyle = '#cbd5e1';
-  for (let i = 0; i < 5; i++) {
-    // Left column
-    ctx.beginPath();
-    ctx.roundRect(16, 230 + i * 10, colW - (i % 2 === 0 ? 10 : 0), 4, [2, 2, 2, 2]);
-    ctx.fill();
-    // Right column
-    ctx.beginPath();
-    ctx.roundRect(16 + colW + 8, 230 + i * 10, colW - (i % 3 === 0 ? 15 : 0), 4, [2, 2, 2, 2]);
-    ctx.fill();
-  }
-
-  // 8. Footer Bar
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 0.8;
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(16, height - 24);
-  ctx.lineTo(width - 16, height - 24);
+  ctx.moveTo(40, h - 80);
+  ctx.lineTo(w - 40, h - 80);
   ctx.stroke();
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '8px "JetBrains Mono", monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText('CRUSHR LABS • DESTRUCTION READY', 16, height - 12);
-  ctx.textAlign = 'right';
-  ctx.fillText('Page 1 of 1', width - 16, height - 12);
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "28px 'JetBrains Mono', monospace";
+  ctx.textAlign = "left";
+  ctx.fillText("CRUSHR LABS • DESTRUCTION READY", 40, h - 40);
+  ctx.textAlign = "right";
+  ctx.fillText("Page 1 of 1", w - 40, h - 40);
 
   return canvas;
 }
 
-/**
- * PDF Hydraulic Press Component
- * Features realistic physics slicing with Matter.js, slow pneumatic descent,
- * buckling, crease lines, explosive flattening, dust particles, and release aftermath.
- */
-export default function HydraulicPress({ fileName = 'report.pdf', onComplete }) {
-  const containerRef = useRef(null);
-  const canvasRef = useRef(null);
-  const pressPistonRef = useRef(null);
-  const pressHeadRef = useRef(null);
-  const gaugeNeedleRef = useRef(null);
+/* -------------------------------------------------------------
+   PARTICLE SYSTEM (dust + ink puffs)
+------------------------------------------------------------- */
+class ParticleSystem {
+  constructor(scene) {
+    this.scene = scene;
+    this.particles = [];
+  }
+  spawn(x, y, z, count = 30, color = 0xffffff) {
+    for (let i = 0; i < count; i++) {
+      const geo = new THREE.SphereGeometry(0.035, 4, 4);
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
+      const mesh = new THREE.Mesh(geo, mat);
+      const angle = Math.random() * Math.PI * 2;
+      const elev = (Math.random() - 0.5) * Math.PI;
+      const speed = 0.04 + Math.random() * 0.1;
+      mesh.position.set(x, y, z);
+      this.scene.add(mesh);
+      this.particles.push({
+        mesh, mat,
+        vx: Math.cos(angle) * Math.cos(elev) * speed,
+        vy: Math.abs(Math.sin(elev)) * speed + 0.015,
+        vz: Math.sin(angle) * Math.cos(elev) * speed * 0.5,
+        gravity: -0.003,
+        alpha: 1,
+        decay: 0.012 + Math.random() * 0.018,
+      });
+    }
+  }
+  update() {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.mesh.position.x += p.vx;
+      p.mesh.position.y += p.vy;
+      p.mesh.position.z += p.vz;
+      p.vy += p.gravity;
+      p.alpha -= p.decay;
+      p.mat.opacity = Math.max(0, p.alpha);
+      if (p.alpha <= 0) {
+        this.scene.remove(p.mesh);
+        p.mat.dispose();
+        this.particles.splice(i, 1);
+      }
+    }
+  }
+  dispose() {
+    this.particles.forEach(p => { this.scene.remove(p.mesh); p.mat.dispose(); });
+    this.particles = [];
+  }
+}
+
+/* -------------------------------------------------------------
+   MAIN COMPONENT
+------------------------------------------------------------- */
+export default function HydraulicPress({ file, fileName = "report.pdf", onComplete }) {
+  const mountRef = useRef(null);
+  const gaugeRef = useRef(null);
+  const psiValueRef = useRef(null);
 
   useEffect(() => {
-    let animId;
+    let rafId;
+    let renderer, scene, camera, tl, particles;
     let isCleanedUp = false;
 
-    const container = containerRef.current;
-    const canvas = canvasRef.current;
-    if (!container || !canvas) return;
+    const container = mountRef.current;
+    if (!container) return;
 
-    const width = container.clientWidth || 600;
-    const height = container.clientHeight || 450;
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
+    const W = container.clientWidth || 700;
+    const H = container.clientHeight || 500;
 
-    // 1. Generate Realistic A4 PDF Texture Replica
-    const docW = 200;
-    const docH = 280;
-    const replicaCanvas = createFileReplica(docW, docH, fileName);
+    // Three.js bootstrap
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0d13);
+    camera = new THREE.PerspectiveCamera(35, W / H, 0.01, 100);
+    camera.position.set(0, 0, 8.5);
 
-    // 2. Setup Matter.js Physics Engine
-    const { Engine, World, Bodies, Body } = Matter;
-    const engine = Engine.create({
-      gravity: { x: 0, y: 1.4, scale: 0.001 },
+    renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(W, H);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const keyLight = new THREE.DirectionalLight(0xffd0a0, 2.5);
+    keyLight.position.set(3, 6, 4);
+    keyLight.castShadow = true;
+    scene.add(keyLight);
+    const fillLight = new THREE.DirectionalLight(0x7eceff, 0.8);
+    fillLight.position.set(-4, 2, 2);
+    scene.add(fillLight);
+
+    // Anvil bed
+    const anvil = new THREE.Mesh(
+      new THREE.BoxGeometry(5.0, 0.35, 2.0),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7, metalness: 0.5 })
+    );
+    anvil.position.set(0, -2.2, 0);
+    anvil.receiveShadow = true;
+    scene.add(anvil);
+
+    // Hazard stripe on anvil
+    const stripesMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(4.8, 0.06, 1.9),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.5 })
+    );
+    stripesMesh.position.set(0, -2.02, 0);
+    scene.add(stripesMesh);
+
+    // Press plate (starts above)
+    const pressPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(4.8, 0.28, 2.0),
+      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4, metalness: 0.85 })
+    );
+    pressPlate.position.set(0, 4.5, 0);
+    pressPlate.castShadow = true;
+    scene.add(pressPlate);
+
+    // Hazard stripe on press plate
+    const plateStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(4.6, 0.05, 1.8),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b })
+    );
+    plateStripe.position.set(0, 0.17, 0);
+    pressPlate.add(plateStripe);
+
+    // Hydraulic rods
+    const rodMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.3, metalness: 0.9 });
+    [-1.5, 1.5].forEach(x => {
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 12, 16), rodMat);
+      rod.position.set(x, 0, 0);
+      scene.add(rod);
     });
-    const world = engine.world;
 
-    // Ground anvil at bottom
-    const anvilY = height - 50;
-    const anvilWidth = Math.min(width - 40, 480);
-    const ground = Bodies.rectangle(width / 2, anvilY + 25, anvilWidth + 80, 50, {
-      isStatic: true,
-      friction: 0.8,
-      restitution: 0.1,
-    });
-    // Side containment walls
-    const leftWall = Bodies.rectangle(width / 2 - anvilWidth / 2 - 20, height / 2, 40, height, { isStatic: true });
-    const rightWall = Bodies.rectangle(width / 2 + anvilWidth / 2 + 20, height / 2, 40, height, { isStatic: true });
-    World.add(world, [ground, leftWall, rightWall]);
+    // Paper group -- starts off-right
+    const paperGrp = new THREE.Group();
+    paperGrp.position.set(8, -0.65, 0);
+    scene.add(paperGrp);
 
-    // 3. Slice Document into 36 Fragments (6 cols x 6 rows)
-    const cols = 6;
-    const rows = 6;
-    const pieceW = docW / cols;
-    const pieceH = docH / rows;
-    const fragments = [];
+    // Paper mesh (subdivided for deformation)
+    const W_SEGS = 30;
+    const H_SEGS = 40;
+    const paperGeo = new THREE.PlaneGeometry(2.2, 3.0, W_SEGS, H_SEGS);
+    const paperMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, side: THREE.DoubleSide, roughness: 0.7 });
+    const paperMesh = new THREE.Mesh(paperGeo, paperMat);
+    paperMesh.castShadow = true;
+    paperGrp.add(paperMesh);
 
-    const startX = (width - docW) / 2;
-    const startY = anvilY - docH;
+    // Store original Y positions for deformation
+    const origPos = Float32Array.from(paperGeo.attributes.position.array);
 
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const posX = startX + c * pieceW + pieceW / 2;
-        const posY = startY + r * pieceH + pieceH / 2;
-        
-        const body = Bodies.rectangle(posX, posY, pieceW, pieceH, {
-          isStatic: true, // Static initially, unlocked on impact
-          friction: 0.7,
-          restitution: 0.15,
-          frictionAir: 0.06,
-        });
-
-        fragments.push({
-          body,
-          c,
-          r,
-          sx: c * (replicaCanvas.width / cols),
-          sy: r * (replicaCanvas.height / rows),
-          sw: replicaCanvas.width / cols,
-          sh: replicaCanvas.height / rows,
-          w: pieceW,
-          h: pieceH,
-          unlocked: false,
-        });
-
-        World.add(world, body);
-      }
+    // Crease lines
+    const creaseMaterials = [];
+    for (let i = 0; i < 8; i++) {
+      const mat = new THREE.LineBasicMaterial({ color: 0x0f172a, transparent: true, opacity: 0 });
+      creaseMaterials.push(mat);
+      const yOff = -1.5 + i * 0.43 + (Math.random() - 0.5) * 0.1;
+      const pts = [
+        new THREE.Vector3(-1.1 + Math.random() * 0.2, yOff, 0.015),
+        new THREE.Vector3(1.1 - Math.random() * 0.2, yOff + (Math.random() - 0.5) * 0.15, 0.015),
+      ];
+      paperGrp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
     }
 
-    // 4. Dynamic Particle System (Dust & Ink Splatters)
-    const particles = [];
-    function spawnPuff(x, y, count = 25, isInk = false) {
+    particles = new ParticleSystem(scene);
+
+    // Load real PDF texture async
+    const fileObj = file instanceof File ? file : null;
+    loadPdfTexture(fileObj, 600, 848).then(texCanvas => {
+      if (isCleanedUp) return;
+      const tex = new THREE.CanvasTexture(texCanvas);
+      tex.needsUpdate = true;
+      paperMesh.material = new THREE.MeshStandardMaterial({
+        map: tex,
+        side: THREE.DoubleSide,
+        roughness: 0.7,
+      });
+    });
+
+    // Deform paper vertices: squashAmt in [0,1], buckleAmt in [0,1]
+    function deformPaper(squashAmt, buckleAmt) {
+      const pos = paperGeo.attributes.position;
+      const count = pos.count;
       for (let i = 0; i < count; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = Math.random() * 8 + 2;
-        particles.push({
-          x,
-          y,
-          vx: Math.cos(angle) * speed * (isInk ? 1.5 : 1),
-          vy: Math.sin(angle) * speed - (isInk ? 1 : 2),
-          size: Math.random() * (isInk ? 4 : 5) + 1.5,
-          color: isInk
-            ? (Math.random() > 0.5 ? '#dc2626' : '#0284c7')
-            : (Math.random() > 0.5 ? '#f8fafc' : '#cbd5e1'),
-          alpha: 1,
-          decay: Math.random() * 0.02 + 0.015,
-        });
+        const origY = origPos[i * 3 + 1];
+        const normY = (origY + 1.5) / 3.0; // 0=bottom 1=top
+        const newY = origY * (1 - squashAmt * 0.92);
+        let newZ = 0;
+        if (buckleAmt > 0) {
+          // Random buckle peaks near center rows
+          const mid = Math.sin(normY * Math.PI);
+          newZ = origPos[i * 3 + 2] + (Math.random() - 0.5) * buckleAmt * mid * 0.3;
+        }
+        pos.setY(i, newY);
+        pos.setZ(i, origPos[i * 3 + 2] * (1 - buckleAmt) + newZ * buckleAmt);
       }
+      pos.needsUpdate = true;
+      paperGeo.computeVertexNormals();
     }
 
-    // Crease lines that appear when buckling under compression
-    const creaseLines = [];
-    function generateCreases() {
-      for (let i = 0; i < 7; i++) {
-        creaseLines.push({
-          x1: startX + Math.random() * docW * 0.2,
-          y1: startY + (i + 0.5) * (docH / 7) + (Math.random() - 0.5) * 15,
-          x2: startX + docW - Math.random() * docW * 0.2,
-          y2: startY + (i + 0.5) * (docH / 7) + (Math.random() - 0.5) * 15,
-          alpha: 0,
-        });
-      }
-    }
-    generateCreases();
-
-    // 5. Setup Master Timeline with GSAP
-    const masterTL = gsap.timeline();
-    const pistonState = {
-      y: 0, // 0 = at top resting, 1 = touching page top, 2 = fully compressed to slab
-      pressure: 0, // 0 to 100 for gauge needle
-      slabCrush: 1, // vertical scale of page before explosion
-      creaseOpacity: 0,
-      opacity: 1,
+    // GSAP state
+    const state = {
+      paperX: 8,
+      plateY: 4.5,
+      pressure: 0,
+      squash: 0,
+      buckle: 0,
+      creaseAlpha: 0,
     };
 
-    // Piston coordinates
-    const pistonTravelMax = anvilY - 18; // Bottom resting height of press plate
-    const initialPistonY = 40;
+    soundEngine.init?.();
 
-    // AUDIO: Start hydraulic pump hiss at t=0
-    soundEngine.playHydraulicHiss();
+    tl = gsap.timeline();
 
-    // ACT 1: Slow pneumatic descent (0s to 2.2s)
-    masterTL.to(pistonState, {
-      y: 0.65,
+    // Phase 1: slide paper in (0-1s)
+    tl.to(state, {
+      paperX: 0,
+      duration: 1.0,
+      ease: "power2.out",
+      onUpdate: () => { paperGrp.position.x = state.paperX; },
+    });
+
+    // Phase 2: slow descent + hiss (1-3.2s)
+    tl.to(state, {
+      plateY: 0.35,
       pressure: 35,
-      duration: 2.0,
-      ease: 'power1.inOut',
+      duration: 2.2,
+      ease: "power1.inOut",
+      onStart: () => { soundEngine.playHydraulicHiss?.(); },
       onUpdate: () => {
-        // Gauge needle rotates
-        if (gaugeNeedleRef.current) {
-          gaugeNeedleRef.current.style.transform = `rotate(${-60 + pistonState.pressure * 1.8}deg)`;
-        }
+        pressPlate.position.y = state.plateY;
+        if (gaugeRef.current)
+          gaugeRef.current.style.transform = `rotate(${-60 + state.pressure * 1.8}deg)`;
+        if (psiValueRef.current)
+          psiValueRef.current.textContent = Math.round(state.pressure * 28);
       },
     });
 
-    // Page starts crinkling under approaching pressure (1.6s to 2.2s)
-    masterTL.to(pistonState, {
-      creaseOpacity: 0.85,
-      duration: 0.6,
-      ease: 'power2.in',
-    }, '-=0.6');
+    // Phase 2b: creases appear (overlap -0.8s)
+    tl.to(state, {
+      creaseAlpha: 0.9,
+      duration: 0.8,
+      ease: "power2.in",
+      onUpdate: () => {
+        creaseMaterials.forEach(m => { m.opacity = state.creaseAlpha; });
+      },
+    }, "-=0.8");
 
-    // ACT 2: MASSIVE CRUSHING SLAM (t = 2.2s to 3.0s)
-    masterTL.to(pistonState, {
-      y: 1.0,
+    // Phase 3: SLAM (3.2-3.65s)
+    tl.to(state, {
+      plateY: -1.88,
       pressure: 100,
-      slabCrush: 0.08,
+      squash: 1.0,
+      buckle: 1.0,
       duration: 0.45,
-      ease: 'power3.in',
+      ease: "power4.in",
       onStart: () => {
-        // Sound sync: HEAVY CRUNCH & IMPACT
-        soundEngine.playCrunch();
-
-        // Screen shake
-        gsap.to(container, {
-          x: 'random(-10, 10)',
-          y: 'random(-8, 8)',
+        soundEngine.playCrunch?.();
+        gsap.to(camera.position, {
+          x: "random(-0.18, 0.18)",
+          y: "random(-0.12, 0.12)",
           duration: 0.04,
-          repeat: 12,
+          repeat: 16,
           yoyo: true,
-          ease: 'power1.inOut',
-          onComplete: () => {
-            gsap.set(container, { x: 0, y: 0 });
-          },
+          ease: "none",
+          onComplete: () => camera.position.set(0, 0, 8.5),
         });
-
-        // Dust & Ink explosions out the sides
-        spawnPuff(startX, anvilY - 10, 30, false);
-        spawnPuff(startX + docW, anvilY - 10, 30, false);
-        spawnPuff(startX + docW * 0.3, anvilY - 10, 20, true);
-        spawnPuff(startX + docW * 0.7, anvilY - 10, 20, true);
-
-        // UNLOCK MATTER.JS BODIES: Outer fragments fly, central fragments compress
-        fragments.forEach((frag) => {
-          Body.setStatic(frag.body, false);
-          frag.unlocked = true;
-
-          // Outward radial explosive force
-          const centerDistX = frag.body.position.x - (width / 2);
-          const isEdge = Math.abs(centerDistX) > docW * 0.28 || frag.r === 0 || frag.r === rows - 1;
-
-          if (isEdge) {
-            Body.setVelocity(frag.body, {
-              x: (centerDistX / (docW / 2)) * (Math.random() * 12 + 6),
-              y: -Math.random() * 8 - 2,
-            });
-            Body.setAngularVelocity(frag.body, (Math.random() - 0.5) * 0.4);
-          } else {
-            // Flattened down against anvil
-            Body.setPosition(frag.body, {
-              x: frag.body.position.x + (Math.random() - 0.5) * 20,
-              y: anvilY - 4 + (Math.random() - 0.5) * 4,
-            });
-            Body.setVelocity(frag.body, {
-              x: (Math.random() - 0.5) * 3,
-              y: 0,
-            });
-          }
-        });
+        particles.spawn(-1.1, -2.0, 0.6, 40, 0xf8fafc);
+        particles.spawn(1.1, -2.0, 0.6, 40, 0xf8fafc);
+        particles.spawn(-0.5, -2.0, 0.6, 25, 0xdc2626);
+        particles.spawn(0.5, -2.0, 0.6, 25, 0x0284c7);
       },
       onUpdate: () => {
-        if (gaugeNeedleRef.current) {
-          gaugeNeedleRef.current.style.transform = `rotate(${-60 + pistonState.pressure * 1.8}deg)`;
-        }
+        pressPlate.position.y = state.plateY;
+        if (gaugeRef.current)
+          gaugeRef.current.style.transform = `rotate(${-60 + state.pressure * 1.8}deg)`;
+        if (psiValueRef.current)
+          psiValueRef.current.textContent = Math.round(state.pressure * 28);
+        deformPaper(state.squash, state.buckle);
       },
     });
 
-    // Hold at maximum tonnage for 1.2 seconds (t = 2.65s to 3.85s)
-    masterTL.to(pistonState, {
+    // Phase 4: hold (3.65-4.85s)
+    tl.to(state, {
       duration: 1.2,
-      onStart: () => {
-        // Lingering secondary puffs
-        spawnPuff(width / 2, anvilY - 8, 12, false);
-      },
+      onStart: () => { particles.spawn(0, -2.0, 0.6, 20, 0xe2e8f0); },
     });
 
-    // ACT 3: Pressure Release & Retraction (t = 3.85s to 5.4s)
-    masterTL.to(pistonState, {
-      y: 0.15, // Retracts up
+    // Phase 5: retract (4.85-6.45s)
+    tl.to(state, {
+      plateY: 4.5,
       pressure: 0,
       duration: 1.6,
-      ease: 'power2.out',
-      onStart: () => {
-        soundEngine.playHydraulicHiss(); // Pressure relief hiss
-      },
+      ease: "power2.out",
+      onStart: () => { soundEngine.playHydraulicHiss?.(); },
       onUpdate: () => {
-        if (gaugeNeedleRef.current) {
-          gaugeNeedleRef.current.style.transform = `rotate(${-60 + pistonState.pressure * 1.8}deg)`;
-        }
+        pressPlate.position.y = state.plateY;
+        if (gaugeRef.current)
+          gaugeRef.current.style.transform = `rotate(${-60 + state.pressure * 1.8}deg)`;
+        if (psiValueRef.current)
+          psiValueRef.current.textContent = Math.round(state.pressure * 28);
       },
     });
 
-    // Reveal flattened paper slab on anvil, then fade out debris
-    masterTL.to(pistonState, {
-      opacity: 0,
-      duration: 0.8,
-      delay: 0.4,
+    // Phase 6: linger + capture (6.45-7.5s)
+    tl.to(state, {
+      duration: 1.0,
       onComplete: () => {
-        if (!isCleanedUp && onComplete) {
-          onComplete();
+        if (isCleanedUp) return;
+        try {
+          renderer.render(scene, camera);
+          renderer.domElement.toBlob(blob => {
+            if (!isCleanedUp && onComplete) onComplete(blob);
+          }, "image/png");
+        } catch {
+          if (!isCleanedUp && onComplete) onComplete(null);
         }
       },
     });
 
-    // 6. 60 FPS Render Loop (Canvas + Matter.js World)
+    // Render loop
     const renderLoop = () => {
       if (isCleanedUp) return;
-
-      Engine.update(engine, 1000 / 60);
-
-      ctx.clearRect(0, 0, width, height);
-      ctx.save();
-      ctx.globalAlpha = pistonState.opacity;
-
-      // Draw Anvil / Base Bed
-      ctx.fillStyle = '#1e293b';
-      ctx.beginPath();
-      ctx.roundRect(width / 2 - anvilWidth / 2, anvilY, anvilWidth, 50, [6, 6, 0, 0]);
-      ctx.fill();
-      ctx.strokeStyle = '#475569';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Anvil bed grooved slots & warning hazard plate
-      ctx.fillStyle = '#334155';
-      for (let gx = width / 2 - anvilWidth / 2 + 30; gx < width / 2 + anvilWidth / 2 - 30; gx += 40) {
-        ctx.fillRect(gx, anvilY + 6, 12, 4);
-      }
-
-      // Draw Ground Shadow under anvil
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.fillRect(width / 2 - anvilWidth / 2 - 10, anvilY + 48, anvilWidth + 20, 10);
-
-      // Current Piston Y position in pixels
-      const currentPlateY = initialPistonY + pistonState.y * (pistonTravelMax - initialPistonY);
-
-      // Draw Piston Chrome Cylinder & Hydraulic Rods
-      const rodW = 20;
-      const rodH = currentPlateY;
-      ctx.fillStyle = '#64748b';
-      ctx.fillRect(width / 2 - 70, 0, rodW, rodH);
-      ctx.fillRect(width / 2 + 50, 0, rodW, rodH);
-
-      // Chrome highlight on rods
-      ctx.fillStyle = '#f1f5f9';
-      ctx.fillRect(width / 2 - 66, 0, 4, rodH);
-      ctx.fillRect(width / 2 + 54, 0, 4, rodH);
-
-      // Draw Hydraulic Press Foot Plate
-      const plateW = anvilWidth - 40;
-      const plateH = 34;
-      ctx.fillStyle = '#334155';
-      ctx.beginPath();
-      ctx.roundRect(width / 2 - plateW / 2, currentPlateY, plateW, plateH, [4, 4, 8, 8]);
-      ctx.fill();
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Yellow/Black Hazard Strip on Press Foot
-      const stripeW = 12;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(width / 2 - plateW / 2 + 8, currentPlateY + 8, plateW - 16, 14);
-      ctx.clip();
-      for (let sx = width / 2 - plateW / 2; sx < width / 2 + plateW / 2 + 40; sx += stripeW * 2) {
-        ctx.fillStyle = '#f59e0b';
-        ctx.beginPath();
-        ctx.moveTo(sx, currentPlateY + 8);
-        ctx.lineTo(sx + stripeW, currentPlateY + 8);
-        ctx.lineTo(sx + stripeW - 8, currentPlateY + 22);
-        ctx.lineTo(sx - 8, currentPlateY + 22);
-        ctx.fill();
-      }
-      ctx.restore();
-
-      // Draw Document Fragments or Intact Buckling Document
-      fragments.forEach((frag) => {
-        ctx.save();
-        ctx.translate(frag.body.position.x, frag.body.position.y);
-        ctx.rotate(frag.body.angle);
-
-        if (!frag.unlocked) {
-          // While locked under initial descent, apply vertical squashing
-          ctx.scale(1, pistonState.slabCrush);
-        }
-
-        // Draw the sliced texture piece from the replica canvas
-        ctx.drawImage(
-          replicaCanvas,
-          frag.sx,
-          frag.sy,
-          frag.sw,
-          frag.sh,
-          -frag.w / 2,
-          -frag.h / 2,
-          frag.w,
-          frag.h
-        );
-
-        ctx.restore();
-      });
-
-      // Draw Crease Lines during paper buckling (before full shatter)
-      if (pistonState.creaseOpacity > 0 && pistonState.slabCrush > 0.4) {
-        ctx.save();
-        ctx.strokeStyle = `rgba(15, 23, 42, ${pistonState.creaseOpacity})`;
-        ctx.lineWidth = 1.5;
-        creaseLines.forEach((c) => {
-          ctx.beginPath();
-          ctx.moveTo(c.x1, c.y1);
-          ctx.lineTo(c.x2, c.y2);
-          ctx.stroke();
-        });
-        ctx.restore();
-      }
-
-      // Draw Debris & Dust Particles
-      for (let i = particles.length - 1; i >= 0; i--) {
-        const p = particles[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.25; // gravity
-        p.alpha -= p.decay;
-
-        if (p.alpha <= 0) {
-          particles.splice(i, 1);
-          continue;
-        }
-
-        ctx.save();
-        ctx.globalAlpha = p.alpha * pistonState.opacity;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
-
-      ctx.restore();
-      animId = requestAnimationFrame(renderLoop);
+      particles.update();
+      renderer.render(scene, camera);
+      rafId = requestAnimationFrame(renderLoop);
     };
+    rafId = requestAnimationFrame(renderLoop);
 
-    animId = requestAnimationFrame(renderLoop);
-
-    // Cleanup on unmount
     return () => {
       isCleanedUp = true;
-      cancelAnimationFrame(animId);
-      masterTL.kill();
-      World.clear(world, false);
-      Engine.clear(engine);
+      cancelAnimationFrame(rafId);
+      tl?.kill();
+      particles?.dispose();
+      renderer.dispose();
+      if (renderer.domElement.parentNode === container) {
+        container.removeChild(renderer.domElement);
+      }
     };
-  }, [fileName, onComplete]);
+  }, [fileName, file, onComplete]);
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full flex flex-col items-center justify-between relative overflow-hidden select-none bg-slate-950/70 rounded-2xl"
-    >
-      {/* Top Industrial Header & Pressure Gauge */}
-      <div className="absolute top-4 left-6 right-6 z-20 flex items-center justify-between pointer-events-none">
+    <div className="w-full h-full flex flex-col items-center justify-between relative overflow-hidden select-none bg-slate-950 rounded-2xl">
+      <div className="absolute top-4 left-5 right-5 z-20 flex items-center justify-between pointer-events-none">
         <div className="flex items-center gap-2">
-          <span className="text-2xl">🏭</span>
+          <span className="text-2xl">??</span>
           <div>
             <div className="font-display font-black text-sm text-amber-400 tracking-wider">
               HYDRAULIC CRUSHR MK-V
             </div>
-            <div className="font-mono-tech text-[10px] text-slate-400">
-              TARGET: {fileName || 'document.pdf'}
+            <div className="font-mono-tech text-[10px] text-slate-400 truncate max-w-[180px]">
+              TARGET: {fileName || "document.pdf"}
             </div>
           </div>
         </div>
-
-        {/* Analog Pressure Gauge */}
-        <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-700 px-3 py-1.5 rounded-2xl shadow-xl">
-          <div className="relative w-8 h-8 rounded-full border-2 border-slate-600 bg-slate-950 flex items-center justify-center">
-            {/* Needle */}
+        <div className="flex items-center gap-3 bg-slate-900/90 border border-slate-700 px-3 py-2 rounded-2xl shadow-xl">
+          <div className="relative w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-950 flex items-center justify-center">
             <div
-              ref={gaugeNeedleRef}
-              className="absolute w-0.5 h-3.5 bg-red-500 origin-bottom rounded transition-transform duration-75"
-              style={{ transform: 'rotate(-60deg)', bottom: '50%' }}
+              ref={gaugeRef}
+              className="absolute w-0.5 h-4 bg-red-500 origin-bottom rounded"
+              style={{ transform: "rotate(-60deg)", bottom: "50%" }}
             />
-            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full z-10" />
+            <div className="w-2 h-2 bg-amber-400 rounded-full z-10" />
           </div>
           <div className="text-[10px] font-mono-tech text-slate-300">
-            <span className="font-bold text-amber-400">PSI x1000</span>
+            <div className="text-amber-400 font-bold">PSI</div>
+            <div ref={psiValueRef} className="text-white font-black text-sm tabular-nums">0</div>
           </div>
         </div>
       </div>
-
-      {/* Primary 60FPS Matter.js Canvas */}
-      <canvas
-        ref={canvasRef}
-        className="w-full h-full block"
-      />
+      <div ref={mountRef} className="w-full h-full" />
     </div>
   );
 }

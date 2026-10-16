@@ -1,6 +1,14 @@
 import React, { useRef, useState } from 'react';
-import { UploadCloud, File, Flame } from 'lucide-react';
+import { UploadCloud, File, FileArchive, Loader2, ShieldCheck, RefreshCw } from 'lucide-react';
 import { mapFileTypeToScene } from '../utils/mapFileType';
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
 export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -34,8 +42,8 @@ export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) 
 
   return (
     <div className="w-full h-full flex flex-col items-center justify-center p-6 sm:p-8 bg-slate-900/90 border border-slate-800 rounded-3xl relative overflow-hidden shadow-2xl">
-      {/* Top Hazard Accent */}
-      <div className="absolute top-0 inset-x-0 h-2 hazard-stripes opacity-80" />
+      {/* Top Accent Line */}
+      <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-500 opacity-60" />
 
       {/* Hidden File Input */}
       <input
@@ -54,21 +62,21 @@ export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) 
           onClick={() => fileInputRef.current && fileInputRef.current.click()}
           className={`w-full h-full min-h-[360px] rounded-2xl border-2 border-dashed p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200 select-none ${
             isDragOver
-              ? 'border-amber-400 bg-amber-950/30 shadow-[0_0_40px_rgba(245,158,11,0.25)] scale-[1.01]'
-              : 'border-slate-700 bg-slate-950/50 hover:border-amber-500/60 hover:bg-slate-950/80'
+              ? 'border-blue-400 bg-blue-950/30 shadow-[0_0_40px_rgba(59,130,246,0.25)] scale-[1.01]'
+              : 'border-slate-700 bg-slate-950/50 hover:border-blue-500/60 hover:bg-slate-950/80'
           }`}
         >
-          {/* Industrial Upload Icon */}
-          <div className="w-20 h-20 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-6 shadow-inner text-amber-400">
+          {/* Upload Icon */}
+          <div className="w-20 h-20 rounded-2xl bg-blue-600/10 border border-blue-500/30 flex items-center justify-center mb-6 shadow-inner text-blue-400">
             <UploadCloud size={38} />
           </div>
 
-          <h3 className="font-display font-extrabold text-xl text-white tracking-wide mb-2">
-            DRAG & DROP FILE HERE
+          <h3 className="font-sans font-bold text-xl text-white tracking-tight mb-2">
+            Drag & drop file here
           </h3>
 
           <p className="font-sans text-xs text-slate-400 max-w-xs mb-6">
-            Accepts any file format: PDF, Word, Excel, PPT, images, video, audio, code, zip, or unknown files.
+            Accepts any file format: PDF, Word, Excel, PPT, images, video, audio, code, and zip archives.
           </p>
 
           {/* "Choose File" Button inside zone */}
@@ -78,7 +86,7 @@ export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) 
               e.stopPropagation();
               fileInputRef.current && fileInputRef.current.click();
             }}
-            className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-display font-black text-xs tracking-widest shadow-lg hover:shadow-amber-500/25 transition-all active:scale-95 uppercase"
+            className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-sans font-semibold text-xs tracking-wider shadow-lg hover:shadow-blue-500/25 transition-all active:scale-95 uppercase cursor-pointer"
           >
             CHOOSE FILE
           </button>
@@ -90,13 +98,18 @@ export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) 
               const mockPdf = new File(['%PDF-1.4 Mock PDF Content'], 'Q3_Financial_Audit_Report.pdf', { type: 'application/pdf' });
               onFileSelected(mockPdf);
             }}
-            className="mt-4 text-[11px] font-mono-tech text-amber-400/90 hover:text-amber-300 underline underline-offset-4 cursor-pointer transition-colors"
+            className="mt-4 text-[11px] font-sans text-blue-400/90 hover:text-blue-300 underline underline-offset-4 cursor-pointer transition-colors"
           >
-            ⚡ Test Benchmark: Q3_Financial_Audit_Report.pdf
+            📄 Try sample file: Q3_Financial_Audit_Report.pdf
           </button>
+
+          <div className="flex items-center gap-1.5 mt-5 text-[11px] text-slate-500">
+            <ShieldCheck size={14} className="text-emerald-500" />
+            <span>100% in-browser processing • Zero upload risk</span>
+          </div>
         </div>
       ) : (
-        /* STATE 2: FILE PICKED - SHOW ONLY FILE NAME + SMALL ICON + "CRUSH IT" BUTTON */
+        /* STATE 2: FILE PICKED - SHOW FILE NAME + ICON + "COMPRESS FILE" BUTTON */
         <div className="w-full flex flex-col items-center justify-center text-center space-y-6 my-auto select-none">
           {/* File Name & Small Icon */}
           <div className="flex flex-col items-center gap-3">
@@ -104,23 +117,46 @@ export default function DropZone({ file, onFileSelected, onCrush, isCrushing }) 
               {fileInfo?.icon || '📄'}
             </div>
 
-            <div className="font-display font-bold text-lg text-white max-w-[280px] break-all px-2">
+            <div className="font-sans font-bold text-lg text-white max-w-[280px] break-all px-2">
               {file.name}
             </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono-tech text-slate-400 bg-slate-800 px-2.5 py-1 rounded-md border border-slate-700">
+                {formatFileSize(file.size)}
+              </span>
+              <span className="text-xs font-sans text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-md border border-emerald-500/30">
+                Ready to compress
+              </span>
+            </div>
+
+            <button
+              type="button"
+              disabled={isCrushing}
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              className="text-[11px] font-sans text-slate-400 hover:text-blue-400 flex items-center gap-1 mt-1 cursor-pointer transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={12} />
+              <span>Choose a different file</span>
+            </button>
           </div>
 
-          {/* Single "Crush It" button below file name */}
+          {/* Single "Compress File" button below file name */}
           <button
             onClick={onCrush}
             disabled={isCrushing}
-            className={`w-full max-w-xs py-4 px-8 rounded-2xl font-display font-black text-base tracking-widest uppercase transition-all duration-200 shadow-xl flex items-center justify-center gap-3 ${
+            className={`w-full max-w-xs py-4 px-8 rounded-2xl font-sans font-bold text-base tracking-wide transition-all duration-200 shadow-xl flex items-center justify-center gap-3 cursor-pointer ${
               isCrushing
-                ? 'bg-amber-700 text-black opacity-80 cursor-wait'
-                : 'bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-black hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(245,158,11,0.4)]'
+                ? 'bg-blue-800 text-white/80 opacity-90 cursor-wait'
+                : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 hover:from-blue-500 hover:to-indigo-500 text-white hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(37,99,235,0.35)]'
             }`}
           >
-            <Flame size={20} className={isCrushing ? 'animate-bounce' : ''} />
-            <span>{isCrushing ? 'CRUSHING...' : 'CRUSH IT'}</span>
+            {isCrushing ? (
+              <Loader2 size={20} className="animate-spin text-white" />
+            ) : (
+              <FileArchive size={20} className="text-white" />
+            )}
+            <span>{isCrushing ? 'COMPRESSING...' : 'COMPRESS FILE'}</span>
           </button>
         </div>
       )}
